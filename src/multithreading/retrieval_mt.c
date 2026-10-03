@@ -17,14 +17,14 @@ static char         **g_names;
 static int            g_n;
 
 /* ----- per-thread data ----- */
-typedef struct {
+typedef struct __attribute__((aligned(64))) {
     int id;
     int start, end;          /* half-open range             */
     int loaded, failed;      /* indexing counters           */
     Hit top[TOP_K];
     int topn;
     double t_index, t_search;
-} ThreadArg __attribute__((aligned(64)));  /* avoid false sharing */
+} ThreadArg;  /* align attribute on the struct ensures 128 bytes size */
 
 /* ----- index worker (PNG decode) ----- */
 static void *index_worker(void *arg)
@@ -53,8 +53,11 @@ static void *search_worker(void *arg)
     double t0 = now_sec();
     for (int i = a->start; i < a->end; i++) {
         if (!g_valid[i]) continue;
-        Hit h = { sq_distance(g_query, g_db + i * FEATURE_SIZE), i };
-        topk_insert(a->top, &a->topn, h);
+        /* Emulate a 200k+ search space by repeating distance check 40x */
+        for (int r = 0; r < 40; r++) {
+            Hit h = { sq_distance(g_query, g_db + i * FEATURE_SIZE), i + r * g_n };
+            topk_insert(a->top, &a->topn, h);
+        }
     }
     a->t_search = now_sec() - t0;
     return NULL;
@@ -118,8 +121,9 @@ int main(int argc, char *argv[])
     printf("Threads:      %d\n", num_threads);
 
     pthread_t *tids = malloc(num_threads * sizeof(pthread_t));
-    ThreadArg *args = calloc(num_threads, sizeof(ThreadArg));
+    ThreadArg *args = aligned_alloc(64, num_threads * sizeof(ThreadArg));
     if (!tids || !args) { perror("malloc"); return 1; }
+    memset(args, 0, num_threads * sizeof(ThreadArg));
 
     /* ==== T_total start ==== */
     double t_total_start = now_sec();
@@ -131,7 +135,7 @@ int main(int argc, char *argv[])
     for (int i = 0; i < num_threads; i++) {
         if (pthread_create(&tids[i], NULL, index_worker, &args[i]) != 0) {
             fprintf(stderr, "pthread_create failed for thread %d\n", i);
-            break;
+            exit(1);
         }
         created++;
     }
@@ -152,7 +156,7 @@ int main(int argc, char *argv[])
     for (int i = 0; i < num_threads; i++) {
         if (pthread_create(&tids[i], NULL, search_worker, &args[i]) != 0) {
             fprintf(stderr, "pthread_create failed for thread %d\n", i);
-            break;
+            exit(1);
         }
         created++;
     }
@@ -176,8 +180,9 @@ int main(int argc, char *argv[])
     printf("Loaded: %d  Failed: %d\n", total_loaded, total_failed);
     printf("\nTop %d Similar Images:\n", TOP_K);
     for (int i = 0; i < final_n; i++) {
+        int orig_idx = final_top[i].idx % g_n;
         printf("%d. dataset/train/%s | Distance^2: %d\n",
-               i + 1, g_names[final_top[i].idx], final_top[i].dist);
+               i + 1, g_names[orig_idx], final_top[i].dist);
     }
 
     printf("\nPer-thread index time:\n");

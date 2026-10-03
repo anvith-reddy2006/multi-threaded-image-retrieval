@@ -8,17 +8,17 @@ cifar-10-batches-py/
 
 # Generated dataset images
 dataset/
+*.png
 
 # Compiled executables
 retrieval
 retrieval_mt
 retrieval_seq
 retrieval_threadpool
+retrieval_pool
 
 # Generated graphs/results
 graphs/*.png
 graphs/*.csv
 results/
-
-# Query image
-query.png
+benchmark_results.csv

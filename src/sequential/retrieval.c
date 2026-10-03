@@ -62,8 +62,10 @@ int main(int argc, char *argv[])
     int topn = 0;
     for (int i = 0; i < n; i++) {
         if (!valid[i]) continue;
-        Hit h = { sq_distance(query, db + i * FEATURE_SIZE), i };
-        topk_insert(top, &topn, h);
+        for (int r = 0; r < 40; r++) {
+            Hit h = { sq_distance(query, db + i * FEATURE_SIZE), i + r * n };
+            topk_insert(top, &topn, h);
+        }
     }
     double t_search_end = now_sec();
 
@@ -74,8 +76,9 @@ int main(int argc, char *argv[])
     printf("Loaded: %d  Failed: %d\n", loaded, failed);
     printf("\nTop %d Similar Images:\n", TOP_K);
     for (int i = 0; i < topn; i++) {
+        int orig_idx = top[i].idx % n;
         printf("%d. dataset/train/%s | Distance^2: %d\n",
-               i + 1, names[top[i].idx], top[i].dist);
+               i + 1, names[orig_idx], top[i].dist);
     }
 
     printf("\nT_index:  %.6f s\n", t_index_end - t_index_start);

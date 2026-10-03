@@ -1,48 +1,51 @@
+import os
+import urllib.request
+import tarfile
 import pickle
-from pathlib import Path
 from PIL import Image
 
-INPUT_DIR = Path("cifar-10-batches-py")
-OUTPUT_DIR = Path("dataset/train")
+URL = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
+ARCHIVE = "cifar-10-python.tar.gz"
+EXTRACTED_DIR = "cifar-10-batches-py"
+OUTPUT_DIR = "dataset/train"
+NUM_IMAGES = 5000
 
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+if not os.path.exists(ARCHIVE):
+    print(f"Downloading CIFAR-10 (162 MB) from {URL}...")
+    urllib.request.urlretrieve(URL, ARCHIVE)
 
-NUM_IMAGES = 10000
+if not os.path.exists(EXTRACTED_DIR):
+    print("Extracting CIFAR-10...")
+    with tarfile.open(ARCHIVE, "r:gz") as tar:
+        tar.extractall()
 
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def load_batch(batch_path):
     with open(batch_path, "rb") as f:
         return pickle.load(f, encoding="bytes")
 
-
 count = 0
+batch_path = os.path.join(EXTRACTED_DIR, "data_batch_1")
+data = load_batch(batch_path)
+images = data[b"data"]
+labels = data[b"labels"]
 
-for batch_num in range(1, 6):
-    batch_path = INPUT_DIR / f"data_batch_{batch_num}"
-    data = load_batch(batch_path)
+print(f"Converting {NUM_IMAGES} real CIFAR-10 images...")
+for i in range(min(NUM_IMAGES, len(images))):
+    img_data = images[i].reshape(3, 32, 32).transpose(1, 2, 0)
+    img = Image.fromarray(img_data)
+    
+    filename = os.path.join(OUTPUT_DIR, f"image_{count:04d}_class_{labels[i]}.png")
+    
+    # Static vs Dynamic scheduling: First 25% are interlaced so they take longer to decode
+    if count < NUM_IMAGES // 4:
+        img.save(filename, interlace=True)
+    else:
+        img.save(filename)
+    count += 1
 
-    images = data[b"data"]
-    labels = data[b"labels"]
-
-    for i in range(len(images)):
-        if count >= NUM_IMAGES:
-            break
-
-        # CIFAR-10 format:
-        # first 1024 = Red
-        # next 1024 = Green
-        # next 1024 = Blue
-        image_data = images[i].reshape(3, 32, 32)
-        image_data = image_data.transpose(1, 2, 0)
-
-        image = Image.fromarray(image_data)
-
-        filename = OUTPUT_DIR / f"image_{count:04d}_class_{labels[i]}.png"
-        image.save(filename)
-
-        count += 1
-
-    if count >= NUM_IMAGES:
-        break
-
-print(f"Converted {count} images.")
+img_data = images[NUM_IMAGES].reshape(3, 32, 32).transpose(1, 2, 0)
+img = Image.fromarray(img_data).convert('L')
+img.save("query.png")
+print("Done generating real CIFAR dataset and query image.")

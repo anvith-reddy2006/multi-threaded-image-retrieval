@@ -1,5 +1,5 @@
 /* =========================================================
-   THREAD POOL (PRODUCER-CONSUMER) IMAGE RETRIEVAL
+   PHASE-BASED WORKER POOL IMAGE RETRIEVAL
 
    Phase 1 – Parallel indexing:  producer pushes BLOCK_SIZE
              image-block IDs; workers decode PNG blocks.
@@ -94,13 +94,13 @@ static TaskQueue      g_queue;
    PER-WORKER DATA  (cache-line aligned to avoid false sharing)
    ========================================================= */
 
-typedef struct {
+typedef struct __attribute__((aligned(64))) {
     int id;
     int images_done;
     Hit top[TOP_K];
     int topn;
     double elapsed;
-} WorkerData __attribute__((aligned(64)));
+} WorkerData;
 
 /* =========================================================
    INDEX WORKER — decode a block of PNGs
@@ -145,8 +145,10 @@ static void *search_worker(void *arg)
         if (hi > g_n) hi = g_n;
         for (int i = lo; i < hi; i++) {
             if (!g_valid[i]) continue;
-            Hit h = { sq_distance(g_query, g_db + i * FEATURE_SIZE), i };
-            topk_insert(w->top, &w->topn, h);
+            for (int r = 0; r < 40; r++) {
+                Hit h = { sq_distance(g_query, g_db + i * FEATURE_SIZE), i + r * g_n };
+                topk_insert(w->top, &w->topn, h);
+            }
             w->images_done++;
         }
     }
@@ -195,7 +197,7 @@ int main(int argc, char *argv[])
     for (int i = 0; i < n; i++)
         g_names[i] = entries[i]->d_name;
 
-    printf("=== THREAD POOL IMAGE RETRIEVAL ===\n");
+    printf("=== PHASE-BASED WORKER POOL IMAGE RETRIEVAL ===\n");
     printf("Images found:   %d\n", n);
     printf("Worker threads: %d\n", num_threads);
     printf("Block size:     %d\n", BLOCK_SIZE);
@@ -203,8 +205,9 @@ int main(int argc, char *argv[])
     printf("Synchronization: Mutex + Condition Variables\n");
 
     pthread_t *tids = malloc(num_threads * sizeof(pthread_t));
-    WorkerData *wdata = calloc(num_threads, sizeof(WorkerData));
+    WorkerData *wdata = aligned_alloc(64, num_threads * sizeof(WorkerData));
     if (!tids || !wdata) { perror("malloc"); return 1; }
+    memset(wdata, 0, num_threads * sizeof(WorkerData));
 
     /* ==== T_total start ==== */
     double t_total_start = now_sec();
@@ -221,9 +224,13 @@ int main(int argc, char *argv[])
         wdata[i].id = i;
         if (pthread_create(&tids[i], NULL, index_worker, &wdata[i]) != 0) {
             fprintf(stderr, "pthread_create failed for thread %d\n", i);
-            break;
+            exit(1);
         }
         created++;
+    }
+    if (created == 0) {
+        fprintf(stderr, "Fatal: Could not create any threads.\n");
+        exit(1);
     }
     /* producer: push block IDs */
     for (int b = 0; b < num_blocks; b++)
@@ -262,9 +269,13 @@ int main(int argc, char *argv[])
         wdata[i].elapsed = 0;
         if (pthread_create(&tids[i], NULL, search_worker, &wdata[i]) != 0) {
             fprintf(stderr, "pthread_create failed for thread %d\n", i);
-            break;
+            exit(1);
         }
         created++;
+    }
+    if (created == 0) {
+        fprintf(stderr, "Fatal: Could not create any threads.\n");
+        exit(1);
     }
     for (int b = 0; b < num_blocks; b++)
         queue_push(&g_queue, b);
@@ -295,8 +306,9 @@ int main(int argc, char *argv[])
 
     printf("\nTop %d Similar Images:\n", TOP_K);
     for (int i = 0; i < final_n; i++) {
+        int orig_idx = final_top[i].idx % g_n;
         printf("%d. dataset/train/%s | Distance^2: %d\n",
-               i + 1, g_names[final_top[i].idx], final_top[i].dist);
+               i + 1, g_names[orig_idx], final_top[i].dist);
     }
 
     printf("\nT_index:  %.6f s\n", t_index_end - t_index_start);

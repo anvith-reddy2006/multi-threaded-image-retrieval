@@ -22,6 +22,10 @@ done
 
 # Get sequential baseline (always deterministic)
 BASELINE=$(./retrieval_seq "$QUERY" 2>/dev/null | grep '^[0-9]\.' | head -5)
+if [ -z "$BASELINE" ]; then
+    echo "ERROR: Baseline run failed or returned no results."
+    exit 1
+fi
 echo "=== Sequential baseline ==="
 echo "$BASELINE"
 echo

@@ -1,12 +1,20 @@
 # Multi-Threaded Image Retrieval
 
-This project implements a multi-threaded image retrieval system, comparing sequential, static multithreading, and thread-pool (producer-consumer) approaches.
+This project implements a multi-threaded image retrieval system, comparing sequential, static multithreading, and phase-based thread-pool (producer-consumer) approaches.
 
 ## Requirements
 
 - GCC (with C11 support)
 - libpng (`libpng-dev`)
-- Python 3 with `matplotlib` for graph generation
+- Python 3 with `matplotlib` and `Pillow` (for dataset generation and graph plotting)
+
+## Generating the Dataset
+
+To generate the dataset, run the provided Python script. It will download the real CIFAR-10 dataset (if not present) and convert 5000 images into standard `.png` format. To test static versus dynamic load balancing, the first 25% of the dataset is interlaced so they are significantly more expensive to decode.
+
+```sh
+python3 src/convert_cifar10.py
+```
 
 ## Building
 
@@ -19,7 +27,7 @@ make all
 This will produce the following executables:
 - `retrieval_seq`: The sequential baseline.
 - `retrieval_mt`: The statically-partitioned multithreaded version.
-- `retrieval_pool`: The thread-pool based version using a bounded queue and dynamic scheduling.
+- `retrieval_pool`: The thread-pool based version using a bounded queue, block-based partitioning, and dynamic scheduling.
 
 ## Running Tests
 
@@ -32,7 +40,7 @@ To verify that all versions produce identical results across thread counts:
 
 ## Benchmarking
 
-To run the full suite (warm-up, 10 runs per configuration, median times), and save the results to a CSV file:
+To run the full suite (warm-up, 10 runs per configuration, median times), and save the results to a CSV file (including context switch logging):
 
 ```sh
 ./benchmark.sh query.png
@@ -42,7 +50,7 @@ This script will output `benchmark_results.csv`.
 
 ## Generating Graphs
 
-To plot execution time and speedup (vs sequential) from the generated CSV file:
+To plot `t_index`, `t_search`, and `t_total` execution time along with speedups from the generated CSV file using the statistically robust medians:
 
 ```sh
 python3 graphs/generate_graphs.py benchmark_results.csv

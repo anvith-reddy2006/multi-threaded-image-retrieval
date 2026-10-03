@@ -23,13 +23,7 @@ for bin in retrieval_seq retrieval_mt retrieval_pool; do
 done
 
 # CSV header
-echo "method,threads,run,t_index,t_search,t_total" > "$CSV"
-
-extract_time() {
-    # $1 = label (e.g. T_index:)
-    # reads from stdin
-    grep "$1" | awk '{print $2}'
-}
+echo "method,threads,run,t_index,t_search,t_total,vol_csw,invol_csw" > "$CSV"
 
 run_benchmark() {
     local BIN=$1
@@ -54,9 +48,18 @@ run_benchmark() {
         T_INDEX=$(echo "$OUTPUT" | grep 'T_index:' | awk '{print $2}')
         T_SEARCH=$(echo "$OUTPUT" | grep 'T_search:' | awk '{print $2}')
         T_TOTAL=$(echo "$OUTPUT" | grep 'T_total:' | awk '{print $2}')
+        
+        CSW=$(echo "$OUTPUT" | grep 'Context switches:') || true
+        if [ -n "$CSW" ]; then
+            VOL_CSW=$(echo "$CSW" | awk '{print $3}')
+            INVOL_CSW=$(echo "$CSW" | awk '{print $5}')
+        else
+            VOL_CSW="0"
+            INVOL_CSW="0"
+        fi
 
         echo "index=$T_INDEX  search=$T_SEARCH  total=$T_TOTAL"
-        echo "$METHOD,$THREADS,$r,$T_INDEX,$T_SEARCH,$T_TOTAL" >> "$CSV"
+        echo "$METHOD,$THREADS,$r,$T_INDEX,$T_SEARCH,$T_TOTAL,$VOL_CSW,$INVOL_CSW" >> "$CSV"
     done
 }
 
