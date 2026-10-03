@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+
+# CIFAR-10 original dataset/archive
+cifar-10-python.tar.gz
+cifar-10-batches-py/
+
+# Generated dataset images
+dataset/
+
+# Compiled executables
+retrieval
+retrieval_mt
+retrieval_seq
+retrieval_threadpool
+
+# Generated graphs/results
+graphs/*.png
+graphs/*.csv
+results/
+
+# Query image
+query.png
