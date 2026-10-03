@@ -89,6 +89,7 @@ static unsigned char *g_query;
 static char         **g_names;
 static int            g_n;
 static TaskQueue      g_queue;
+static const char    *g_db_dir;
 
 /* =========================================================
    PER-WORKER DATA  (cache-line aligned to avoid false sharing)
@@ -118,7 +119,7 @@ static void *index_worker(void *arg)
         int hi = lo + BLOCK_SIZE;
         if (hi > g_n) hi = g_n;
         for (int i = lo; i < hi; i++) {
-            snprintf(path, sizeof(path), "dataset/train/%s", g_names[i]);
+            snprintf(path, sizeof(path), "%s/%s", g_db_dir, g_names[i]);
             if (load_gray32(path, g_db + i * FEATURE_SIZE))
                 g_valid[i] = 1;
             w->images_done++;
@@ -170,6 +171,8 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    g_db_dir = getenv("IMG_DB_DIR") ? getenv("IMG_DB_DIR") : "dataset/train";
+
     /* ---- load query ---- */
     unsigned char query[FEATURE_SIZE];
     if (!load_gray32(argv[1], query)) {
@@ -177,13 +180,12 @@ int main(int argc, char *argv[])
         return 1;
     }
     g_query = query;
-    const char *db_dir = getenv("IMG_DB_DIR") ? getenv("IMG_DB_DIR") : "dataset/train";
 
     /* ---- scan directory ---- */
     struct dirent **entries;
-    int n = scan_png_dir(db_dir, &entries);
+    int n = scan_png_dir(g_db_dir, &entries);
     if (n == 0) {
-        fprintf(stderr, "No .png files in dataset/train\n");
+        fprintf(stderr, "No .png files in %s\n", g_db_dir);
         return 1;
     }
     g_n = n;
@@ -305,9 +307,8 @@ int main(int argc, char *argv[])
 
     printf("\nTop %d Similar Images:\n", TOP_K);
     for (int i = 0; i < final_n; i++) {
-        int orig_idx = final_top[i].idx % g_n;
-        printf("%d. dataset/train/%s | Distance^2: %d\n",
-               i + 1, g_names[orig_idx], final_top[i].dist);
+        printf("%d. %s/%s | Distance^2: %d\n",
+               i + 1, g_db_dir, g_names[final_top[i].idx], final_top[i].dist);
     }
 
     printf("\nT_index:  %.6f s\n", t_index_end - t_index_start);

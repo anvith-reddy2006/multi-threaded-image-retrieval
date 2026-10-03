@@ -11,6 +11,8 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    const char *db_dir = getenv("IMG_DB_DIR") ? getenv("IMG_DB_DIR") : "dataset/train";
+
     /* ---- load query ---- */
     unsigned char query[FEATURE_SIZE];
     if (!load_gray32(argv[1], query)) {
@@ -22,14 +24,13 @@ int main(int argc, char *argv[])
     struct dirent **entries;
     int n = scan_png_dir(db_dir, &entries);
     if (n == 0) {
-        fprintf(stderr, "No .png files in dataset/train\n");
+        fprintf(stderr, "No .png files in %s\n", db_dir);
         return 1;
     }
 
     /* ---- allocate flat database ---- */
     unsigned char *db    = calloc(n, FEATURE_SIZE);
     unsigned char *valid = calloc(n, 1);
-    const char *db_dir = getenv("IMG_DB_DIR") ? getenv("IMG_DB_DIR") : "dataset/train";
     char         **names = malloc(n * sizeof(char *));
     if (!db || !valid || !names) { perror("malloc"); return 1; }
 
@@ -47,7 +48,7 @@ int main(int argc, char *argv[])
     int loaded = 0, failed = 0;
     char path[512];
     for (int i = 0; i < n; i++) {
-        snprintf(path, sizeof(path), "dataset/train/%s", names[i]);
+        snprintf(path, sizeof(path), "%s/%s", db_dir, names[i]);
         if (load_gray32(path, db + i * FEATURE_SIZE)) {
             valid[i] = 1;
             loaded++;
@@ -75,9 +76,8 @@ int main(int argc, char *argv[])
     printf("Loaded: %d  Failed: %d\n", loaded, failed);
     printf("\nTop %d Similar Images:\n", TOP_K);
     for (int i = 0; i < topn; i++) {
-        int orig_idx = top[i].idx % n;
-        printf("%d. dataset/train/%s | Distance^2: %d\n",
-               i + 1, names[orig_idx], top[i].dist);
+        printf("%d. %s/%s | Distance^2: %d\n",
+               i + 1, db_dir, names[top[i].idx], top[i].dist);
     }
 
     printf("\nT_index:  %.6f s\n", t_index_end - t_index_start);
