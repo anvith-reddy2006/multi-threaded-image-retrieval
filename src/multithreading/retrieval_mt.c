@@ -54,10 +54,8 @@ static void *search_worker(void *arg)
     for (int i = a->start; i < a->end; i++) {
         if (!g_valid[i]) continue;
         /* Emulate a 200k+ search space by repeating distance check 40x */
-        for (int r = 0; r < 40; r++) {
-            Hit h = { sq_distance(g_query, g_db + i * FEATURE_SIZE), i + r * g_n };
-            topk_insert(a->top, &a->topn, h);
-        }
+        Hit h = { sq_distance(g_query, g_db + i * FEATURE_SIZE), i };
+        topk_insert(a->top, &a->topn, h);
     }
     a->t_search = now_sec() - t0;
     return NULL;
@@ -99,10 +97,11 @@ int main(int argc, char *argv[])
         return 1;
     }
     g_query = query;
+    const char *db_dir = getenv("IMG_DB_DIR") ? getenv("IMG_DB_DIR") : "dataset/train";
 
     /* ---- scan directory ---- */
     struct dirent **entries;
-    int n = scan_png_dir("dataset/train", &entries);
+    int n = scan_png_dir(db_dir, &entries);
     if (n == 0) {
         fprintf(stderr, "No .png files in dataset/train\n");
         return 1;

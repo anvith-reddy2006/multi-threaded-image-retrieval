@@ -20,7 +20,7 @@ int main(int argc, char *argv[])
 
     /* ---- scan dataset directory ---- */
     struct dirent **entries;
-    int n = scan_png_dir("dataset/train", &entries);
+    int n = scan_png_dir(db_dir, &entries);
     if (n == 0) {
         fprintf(stderr, "No .png files in dataset/train\n");
         return 1;
@@ -29,6 +29,7 @@ int main(int argc, char *argv[])
     /* ---- allocate flat database ---- */
     unsigned char *db    = calloc(n, FEATURE_SIZE);
     unsigned char *valid = calloc(n, 1);
+    const char *db_dir = getenv("IMG_DB_DIR") ? getenv("IMG_DB_DIR") : "dataset/train";
     char         **names = malloc(n * sizeof(char *));
     if (!db || !valid || !names) { perror("malloc"); return 1; }
 
@@ -62,10 +63,8 @@ int main(int argc, char *argv[])
     int topn = 0;
     for (int i = 0; i < n; i++) {
         if (!valid[i]) continue;
-        for (int r = 0; r < 40; r++) {
-            Hit h = { sq_distance(query, db + i * FEATURE_SIZE), i + r * n };
-            topk_insert(top, &topn, h);
-        }
+        Hit h = { sq_distance(query, db + i * FEATURE_SIZE), i };
+        topk_insert(top, &topn, h);
     }
     double t_search_end = now_sec();
 

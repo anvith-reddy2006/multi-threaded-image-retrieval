@@ -145,10 +145,8 @@ static void *search_worker(void *arg)
         if (hi > g_n) hi = g_n;
         for (int i = lo; i < hi; i++) {
             if (!g_valid[i]) continue;
-            for (int r = 0; r < 40; r++) {
-                Hit h = { sq_distance(g_query, g_db + i * FEATURE_SIZE), i + r * g_n };
-                topk_insert(w->top, &w->topn, h);
-            }
+            Hit h = { sq_distance(g_query, g_db + i * FEATURE_SIZE), i };
+            topk_insert(w->top, &w->topn, h);
             w->images_done++;
         }
     }
@@ -179,10 +177,11 @@ int main(int argc, char *argv[])
         return 1;
     }
     g_query = query;
+    const char *db_dir = getenv("IMG_DB_DIR") ? getenv("IMG_DB_DIR") : "dataset/train";
 
     /* ---- scan directory ---- */
     struct dirent **entries;
-    int n = scan_png_dir("dataset/train", &entries);
+    int n = scan_png_dir(db_dir, &entries);
     if (n == 0) {
         fprintf(stderr, "No .png files in dataset/train\n");
         return 1;

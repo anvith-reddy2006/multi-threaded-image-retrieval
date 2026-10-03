@@ -37,15 +37,10 @@ for i in range(min(NUM_IMAGES, len(images))):
     img = Image.fromarray(img_data)
     
     filename = os.path.join(OUTPUT_DIR, f"image_{count:04d}_class_{labels[i]}.png")
-    
-    # Static vs Dynamic scheduling: First 25% are interlaced so they take longer to decode
-    if count < NUM_IMAGES // 4:
-        img.save(filename, interlace=True)
-    else:
-        img.save(filename)
+    img.save(filename)
     count += 1
 
 img_data = images[NUM_IMAGES].reshape(3, 32, 32).transpose(1, 2, 0)
-img = Image.fromarray(img_data).convert('L')
+img = Image.fromarray(img_data)
 img.save("query.png")
 print("Done generating real CIFAR dataset and query image.")
