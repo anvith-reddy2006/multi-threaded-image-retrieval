@@ -1,626 +1,204 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <dirent.h>
+/* =========================================================
+   STATIC MULTITHREADED IMAGE RETRIEVAL
+
+   Parallel indexing  (PNG decode) with static partitioning.
+   Parallel search    with per-thread local top-k, then merge.
+   ========================================================= */
+
+#include "../common.h"
 #include <pthread.h>
-#include <png.h>
-#include <math.h>
-#include <time.h>
+#include <sys/resource.h>
 
-#define MAX_IMAGES 10000
-#define FEATURE_SIZE (32 * 32)
-#define MAX_FILENAME 256
-#define MAX_PATH 512
-#define TOP_K 5
+/* ----- shared state ----- */
+static unsigned char *g_db;
+static unsigned char *g_valid;
+static unsigned char *g_query;
+static char         **g_names;
+static int            g_n;
 
+/* ----- per-thread data ----- */
 typedef struct {
-    char filename[MAX_FILENAME];
-    unsigned char *data;
-} ImageData;
+    int id;
+    int start, end;          /* half-open range             */
+    int loaded, failed;      /* indexing counters           */
+    Hit top[TOP_K];
+    int topn;
+    double t_index, t_search;
+} ThreadArg __attribute__((aligned(64)));  /* avoid false sharing */
 
-typedef struct {
-    char filename[MAX_FILENAME];
-    double distance;
-} ImageResult;
-
-typedef struct {
-    ImageData *images;
-    unsigned char *query;
-    ImageResult *results;
-    int start;
-    int end;
-} ThreadData;
-
-/* Load PNG image and convert it to 32x32 grayscale. */
-int load_grayscale(const char *filename,
-                   unsigned char *pixels)
+/* ----- index worker (PNG decode) ----- */
+static void *index_worker(void *arg)
 {
-    FILE *fp = fopen(filename, "rb");
-
-    if (!fp)
-        return 0;
-
-    unsigned char header[8];
-
-    if (fread(header, 1, 8, fp) != 8 ||
-        png_sig_cmp(header, 0, 8)) {
-        fclose(fp);
-        return 0;
+    ThreadArg *a = arg;
+    char path[512];
+    double t0 = now_sec();
+    for (int i = a->start; i < a->end; i++) {
+        snprintf(path, sizeof(path), "dataset/train/%s", g_names[i]);
+        if (load_gray32(path, g_db + i * FEATURE_SIZE)) {
+            g_valid[i] = 1;
+            a->loaded++;
+        } else {
+            a->failed++;
+        }
     }
-
-    png_structp png =
-        png_create_read_struct(
-            PNG_LIBPNG_VER_STRING,
-            NULL,
-            NULL,
-            NULL
-        );
-
-    if (!png) {
-        fclose(fp);
-        return 0;
-    }
-
-    png_infop info =
-        png_create_info_struct(png);
-
-    if (!info) {
-        png_destroy_read_struct(&png, NULL, NULL);
-        fclose(fp);
-        return 0;
-    }
-
-    if (setjmp(png_jmpbuf(png))) {
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(fp);
-        return 0;
-    }
-
-    png_init_io(png, fp);
-    png_set_sig_bytes(png, 8);
-    png_read_info(png, info);
-
-    png_uint_32 width, height;
-    int bit_depth, color_type;
-
-    png_get_IHDR(
-        png,
-        info,
-        &width,
-        &height,
-        &bit_depth,
-        &color_type,
-        NULL,
-        NULL,
-        NULL
-    );
-
-    if (width != 32 || height != 32) {
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(fp);
-        return 0;
-    }
-
-    if (bit_depth == 16)
-        png_set_strip_16(png);
-
-    if (color_type == PNG_COLOR_TYPE_PALETTE)
-        png_set_palette_to_rgb(png);
-
-    if (color_type == PNG_COLOR_TYPE_RGB ||
-        color_type == PNG_COLOR_TYPE_RGB_ALPHA ||
-        color_type == PNG_COLOR_TYPE_PALETTE) {
-
-        png_set_rgb_to_gray_fixed(
-            png,
-            1,
-            -1,
-            -1
-        );
-    }
-
-    if (color_type & PNG_COLOR_MASK_ALPHA)
-        png_set_strip_alpha(png);
-
-    png_read_update_info(png, info);
-
-    png_bytep row =
-        (png_bytep)malloc(
-            png_get_rowbytes(png, info)
-        );
-
-    if (!row) {
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(fp);
-        return 0;
-    }
-
-    for (int y = 0; y < 32; y++) {
-
-        png_read_row(png, row, NULL);
-
-        memcpy(
-            &pixels[y * 32],
-            row,
-            32
-        );
-    }
-
-    free(row);
-
-    png_read_end(png, NULL);
-
-    png_destroy_read_struct(
-        &png,
-        &info,
-        NULL
-    );
-
-    fclose(fp);
-
-    return 1;
-}
-
-/* Calculate Euclidean distance. */
-double calculate_distance(
-    const unsigned char *a,
-    const unsigned char *b)
-{
-    double sum = 0.0;
-
-    for (int i = 0; i < FEATURE_SIZE; i++) {
-
-        double diff =
-            (double)a[i] -
-            (double)b[i];
-
-        sum += diff * diff;
-    }
-
-    return sqrt(sum);
-}
-
-/* Worker thread. */
-void *worker(void *arg)
-{
-    ThreadData *data =
-        (ThreadData *)arg;
-
-    for (int i = data->start;
-         i < data->end;
-         i++) {
-
-        double distance =
-            calculate_distance(
-                data->query,
-                data->images[i].data
-            );
-
-        strcpy(
-            data->results[
-                i - data->start
-            ].filename,
-            data->images[i].filename
-        );
-
-        data->results[
-            i - data->start
-        ].distance = distance;
-    }
-
+    a->t_index = now_sec() - t0;
     return NULL;
 }
 
-/* Sort by ascending distance. */
-int compare_results(
-    const void *a,
-    const void *b)
+/* ----- search worker (distance computation) ----- */
+static void *search_worker(void *arg)
 {
-    const ImageResult *x =
-        (const ImageResult *)a;
+    ThreadArg *a = arg;
+    a->topn = 0;
+    double t0 = now_sec();
+    for (int i = a->start; i < a->end; i++) {
+        if (!g_valid[i]) continue;
+        Hit h = { sq_distance(g_query, g_db + i * FEATURE_SIZE), i };
+        topk_insert(a->top, &a->topn, h);
+    }
+    a->t_search = now_sec() - t0;
+    return NULL;
+}
 
-    const ImageResult *y =
-        (const ImageResult *)b;
-
-    if (x->distance < y->distance)
-        return -1;
-
-    if (x->distance > y->distance)
-        return 1;
-
-    return 0;
+/* ----- static partition helper ----- */
+static void partition(int total, int nthreads, ThreadArg *args)
+{
+    int base = total / nthreads;
+    int rem  = total % nthreads;
+    int off  = 0;
+    for (int i = 0; i < nthreads; i++) {
+        args[i].id     = i;
+        args[i].start  = off;
+        args[i].end    = off + base + (i < rem ? 1 : 0);
+        args[i].loaded = 0;
+        args[i].failed = 0;
+        args[i].topn   = 0;
+        off = args[i].end;
+    }
 }
 
 int main(int argc, char *argv[])
 {
     if (argc != 3) {
-
-        printf(
-            "Usage: %s <query_image.png> <num_threads>\n",
-            argv[0]
-        );
-
+        fprintf(stderr, "Usage: %s <query.png> <num_threads>\n", argv[0]);
+        return 1;
+    }
+    int num_threads = atoi(argv[2]);
+    if (num_threads < 1 || num_threads > 256) {
+        fprintf(stderr, "Thread count must be 1..256\n");
         return 1;
     }
 
-    int num_threads =
-        atoi(argv[2]);
-
-    if (num_threads < 1 ||
-        num_threads > 32) {
-
-        printf(
-            "Number of threads must be between 1 and 32.\n"
-        );
-
-        return 1;
-    }
-
-    /* Load query image. */
+    /* ---- load query ---- */
     unsigned char query[FEATURE_SIZE];
-
-    if (!load_grayscale(
-            argv[1],
-            query)) {
-
-        printf(
-            "Error loading query image: %s\n",
-            argv[1]
-        );
-
+    if (!load_gray32(argv[1], query)) {
+        fprintf(stderr, "Cannot load query: %s\n", argv[1]);
         return 1;
     }
+    g_query = query;
 
-    /* Open dataset. */
-    DIR *dir =
-        opendir("dataset/train");
-
-    if (!dir) {
-
-        perror("dataset/train");
-
+    /* ---- scan directory ---- */
+    struct dirent **entries;
+    int n = scan_png_dir("dataset/train", &entries);
+    if (n == 0) {
+        fprintf(stderr, "No .png files in dataset/train\n");
         return 1;
     }
+    g_n = n;
 
-    ImageData *images =
-        malloc(
-            MAX_IMAGES *
-            sizeof(ImageData)
-        );
+    g_db    = calloc(n, FEATURE_SIZE);
+    g_valid = calloc(n, 1);
+    g_names = malloc(n * sizeof(char *));
+    if (!g_db || !g_valid || !g_names) { perror("malloc"); return 1; }
+    for (int i = 0; i < n; i++)
+        g_names[i] = entries[i]->d_name;
 
-    if (!images) {
+    printf("=== STATIC MULTITHREADED IMAGE RETRIEVAL ===\n");
+    printf("Images found: %d\n", n);
+    printf("Threads:      %d\n", num_threads);
 
-        perror("malloc");
+    pthread_t *tids = malloc(num_threads * sizeof(pthread_t));
+    ThreadArg *args = calloc(num_threads, sizeof(ThreadArg));
+    if (!tids || !args) { perror("malloc"); return 1; }
 
-        closedir(dir);
+    /* ==== T_total start ==== */
+    double t_total_start = now_sec();
 
-        return 1;
-    }
-
-    struct dirent *entry;
-
-    int image_count = 0;
-
-    printf(
-        "=== STATIC MULTITHREADED IMAGE RETRIEVAL ===\n"
-    );
-
-    /* Find images. */
-    while ((entry = readdir(dir)) != NULL) {
-
-        if (image_count >= MAX_IMAGES)
+    /* ---- T_index: parallel PNG decode ---- */
+    partition(n, num_threads, args);
+    double t_index_start = now_sec();
+    int created = 0;
+    for (int i = 0; i < num_threads; i++) {
+        if (pthread_create(&tids[i], NULL, index_worker, &args[i]) != 0) {
+            fprintf(stderr, "pthread_create failed for thread %d\n", i);
             break;
-
-        if (strstr(
-                entry->d_name,
-                ".png") == NULL)
-            continue;
-
-        strcpy(
-            images[image_count].filename,
-            entry->d_name
-        );
-
-        images[image_count].data =
-            malloc(FEATURE_SIZE);
-
-        if (!images[image_count].data) {
-
-            perror("malloc");
-
-            closedir(dir);
-
-            return 1;
         }
+        created++;
+    }
+    for (int i = 0; i < created; i++)
+        pthread_join(tids[i], NULL);
+    double t_index_end = now_sec();
 
-        image_count++;
+    int total_loaded = 0, total_failed = 0;
+    for (int i = 0; i < created; i++) {
+        total_loaded += args[i].loaded;
+        total_failed += args[i].failed;
     }
 
-    closedir(dir);
-
-    printf(
-        "Images: %d\n",
-        image_count
-    );
-
-    printf(
-        "Threads: %d\n",
-        num_threads
-    );
-
-    printf(
-        "Loading images into memory...\n"
-    );
-
-    /* Load all images BEFORE timing. */
-    for (int i = 0;
-         i < image_count;
-         i++) {
-
-        char path[MAX_PATH];
-
-        snprintf(
-            path,
-            sizeof(path),
-            "dataset/train/%s",
-            images[i].filename
-        );
-
-        if (!load_grayscale(
-                path,
-                images[i].data)) {
-
-            printf(
-                "Error loading: %s\n",
-                path
-            );
-
-            for (int j = 0;
-                 j < image_count;
-                 j++)
-                free(images[j].data);
-
-            free(images);
-
-            return 1;
+    /* ---- T_search: parallel distance computation ---- */
+    partition(n, num_threads, args);
+    double t_search_start = now_sec();
+    created = 0;
+    for (int i = 0; i < num_threads; i++) {
+        if (pthread_create(&tids[i], NULL, search_worker, &args[i]) != 0) {
+            fprintf(stderr, "pthread_create failed for thread %d\n", i);
+            break;
         }
+        created++;
+    }
+    for (int i = 0; i < created; i++)
+        pthread_join(tids[i], NULL);
+
+    /* merge per-thread top-k */
+    Hit final_top[TOP_K];
+    int final_n = 0;
+    for (int i = 0; i < created; i++)
+        topk_merge(final_top, &final_n, args[i].top, args[i].topn);
+    double t_search_end = now_sec();
+
+    double t_total_end = now_sec();
+
+    /* ---- context switches ---- */
+    struct rusage ru;
+    getrusage(RUSAGE_SELF, &ru);
+
+    /* ---- results ---- */
+    printf("Loaded: %d  Failed: %d\n", total_loaded, total_failed);
+    printf("\nTop %d Similar Images:\n", TOP_K);
+    for (int i = 0; i < final_n; i++) {
+        printf("%d. dataset/train/%s | Distance^2: %d\n",
+               i + 1, g_names[final_top[i].idx], final_top[i].dist);
     }
 
-    printf(
-        "All images loaded.\n"
-    );
+    printf("\nPer-thread index time:\n");
+    for (int i = 0; i < num_threads; i++)
+        printf("  Thread %d: %.6f s  (images %d..%d)\n",
+               i, args[i].t_index, args[i].start, args[i].end - 1);
 
-    /* Allocate thread structures. */
-    pthread_t *threads =
-        malloc(
-            num_threads *
-            sizeof(pthread_t)
-        );
+    printf("Per-thread search time:\n");
+    for (int i = 0; i < num_threads; i++)
+        printf("  Thread %d: %.6f s\n", i, args[i].t_search);
 
-    ThreadData *thread_data =
-        malloc(
-            num_threads *
-            sizeof(ThreadData)
-        );
+    printf("\nT_index:  %.6f s\n", t_index_end - t_index_start);
+    printf("T_search: %.6f s\n", t_search_end - t_search_start);
+    printf("T_total:  %.6f s\n", t_total_end - t_total_start);
+    printf("Context switches: %ld voluntary, %ld involuntary\n",
+           ru.ru_nvcsw, ru.ru_nivcsw);
 
-    ImageResult **thread_results =
-        malloc(
-            num_threads *
-            sizeof(ImageResult *)
-        );
-
-    if (!threads ||
-        !thread_data ||
-        !thread_results) {
-
-        perror("malloc");
-
-        return 1;
-    }
-
-    /*
-     * Each thread gets its own result array.
-     * This avoids races on shared result data.
-     */
-    for (int i = 0;
-         i < num_threads;
-         i++) {
-
-        thread_results[i] =
-            malloc(
-                MAX_IMAGES *
-                sizeof(ImageResult)
-            );
-
-        if (!thread_results[i]) {
-
-            perror("malloc");
-
-            return 1;
-        }
-    }
-
-    struct timespec start_time;
-    struct timespec end_time;
-
-    /*
-     * Start timing only the parallel
-     * similarity computation and
-     * thread creation/join overhead.
-     */
-    clock_gettime(
-        CLOCK_MONOTONIC,
-        &start_time
-    );
-
-    int images_per_thread =
-        image_count / num_threads;
-
-    int remaining =
-        image_count % num_threads;
-
-    int current_start = 0;
-
-    /* Create worker threads. */
-    for (int i = 0;
-         i < num_threads;
-         i++) {
-
-        int current_end =
-            current_start +
-            images_per_thread;
-
-        if (i == num_threads - 1)
-            current_end += remaining;
-
-        thread_data[i].images =
-            images;
-
-        thread_data[i].query =
-            query;
-
-        thread_data[i].results =
-            thread_results[i];
-
-        thread_data[i].start =
-            current_start;
-
-        thread_data[i].end =
-            current_end;
-
-        if (pthread_create(
-                &threads[i],
-                NULL,
-                worker,
-                &thread_data[i]
-            ) != 0) {
-
-            printf(
-                "Error creating thread %d\n",
-                i
-            );
-
-            return 1;
-        }
-
-        current_start =
-            current_end;
-    }
-
-    /* Wait for all workers. */
-    for (int i = 0;
-         i < num_threads;
-         i++) {
-
-        pthread_join(
-            threads[i],
-            NULL
-        );
-    }
-
-    /* Stop timer BEFORE sorting. */
-    clock_gettime(
-        CLOCK_MONOTONIC,
-        &end_time
-    );
-
-    double elapsed =
-        (end_time.tv_sec -
-         start_time.tv_sec)
-        +
-        (end_time.tv_nsec -
-         start_time.tv_nsec)
-        / 1000000000.0;
-
-    /* Merge thread results. */
-    ImageResult *all_results =
-        malloc(
-            image_count *
-            sizeof(ImageResult)
-        );
-
-    if (!all_results) {
-
-        perror("malloc");
-
-        return 1;
-    }
-
-    int result_index = 0;
-
-    for (int i = 0;
-         i < num_threads;
-         i++) {
-
-        int count =
-            thread_data[i].end -
-            thread_data[i].start;
-
-        for (int j = 0;
-             j < count;
-             j++) {
-
-            all_results[result_index] =
-                thread_results[i][j];
-
-            result_index++;
-        }
-    }
-
-    /* Sort AFTER timing. */
-    qsort(
-        all_results,
-        image_count,
-        sizeof(ImageResult),
-        compare_results
-    );
-
-    /* Display results. */
-    printf(
-        "\nTop %d Similar Images:\n",
-        TOP_K
-    );
-
-    int limit =
-        image_count < TOP_K
-        ? image_count
-        : TOP_K;
-
-    for (int i = 0;
-         i < limit;
-         i++) {
-
-        printf(
-            "%d. dataset/train/%s | Distance: %.2f\n",
-            i + 1,
-            all_results[i].filename,
-            all_results[i].distance
-        );
-    }
-
-    printf(
-        "\nExecution Time: %.6f seconds\n",
-        elapsed
-    );
-
-    /* Free memory. */
-    free(all_results);
-
-    for (int i = 0;
-         i < num_threads;
-         i++)
-        free(thread_results[i]);
-
-    free(thread_results);
-    free(threads);
-    free(thread_data);
-
-    for (int i = 0;
-         i < image_count;
-         i++)
-        free(images[i].data);
-
-    free(images);
-
+    /* ---- cleanup ---- */
+    for (int i = 0; i < n; i++) free(entries[i]);
+    free(entries);
+    free(g_db); free(g_valid); free(g_names);
+    free(tids); free(args);
     return 0;
 }
