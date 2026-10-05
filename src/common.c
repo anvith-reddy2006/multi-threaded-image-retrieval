@@ -51,12 +51,13 @@ void compute_histogram(const unsigned char *pixels, int *hist)
     }
 }
 
-/* Manhattan Distance (L1 norm) between two 256-bin histograms */
+/* Euclidean Distance (L2 norm squared) between two 256-bin histograms */
 int hist_distance(const int *h1, const int *h2)
 {
     int sum = 0;
     for (int i = 0; i < HIST_BINS; i++) {
-        sum += abs(h1[i] - h2[i]);
+        int diff = h1[i] - h2[i];
+        sum += (diff * diff);
     }
     return sum;
 }

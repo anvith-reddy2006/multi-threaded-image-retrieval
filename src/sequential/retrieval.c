@@ -61,9 +61,9 @@ int main(int argc, char *argv[])
     double t_total_end = now_sec();
 
     printf("Loaded: %d  Failed: %d\n", loaded, failed);
-    printf("\nTop %d Similar Images (L1 Histogram Distance):\n", TOP_K);
+    printf("\nTop %d Similar Images (Euclidean Histogram Distance):\n", TOP_K);
     for (int i = 0; i < topn; i++) {
-        printf("%d. dataset/train/%s | L1 Dist: %d\n", i + 1, names[top[i].idx], top[i].dist);
+        printf("%d. dataset/train/%s | Euclidean Dist: %d\n", i + 1, names[top[i].idx], top[i].dist);
     }
 
     printf("\nT_index:  %.6f s\n", t_index_end - t_index_start);

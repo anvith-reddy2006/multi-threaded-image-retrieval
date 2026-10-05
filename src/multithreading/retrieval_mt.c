@@ -105,9 +105,9 @@ int main(int argc, char *argv[])
 
     struct rusage ru; getrusage(RUSAGE_SELF, &ru);
 
-    printf("\nTop %d Similar Images (L1 Histogram Distance):\n", TOP_K);
+    printf("\nTop %d Similar Images (Euclidean Histogram Distance):\n", TOP_K);
     for (int i = 0; i < final_n; i++) {
-        printf("%d. dataset/train/%s | L1 Dist: %d\n", i + 1, g_names[final_top[i].idx], final_top[i].dist);
+        printf("%d. dataset/train/%s | Euclidean Dist: %d\n", i + 1, g_names[final_top[i].idx], final_top[i].dist);
     }
     printf("\nT_index:  %.6f s\n", t_index_end - t_index_start);
     printf("T_search: %.6f s\n", t_search_end - t_search_start);
