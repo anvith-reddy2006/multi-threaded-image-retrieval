@@ -7,63 +7,45 @@
 #include <dirent.h>
 #include <time.h>
 #include <png.h>
+#include <math.h>
 
 /* =========================================================
    CONSTANTS
    ========================================================= */
 
-#define FEATURE_SIZE  (32 * 32)   /* 1024 bytes per image    */
+#define HIST_BINS     256         /* 256-bin grayscale histogram */
 #define TOP_K         5
 #define BLOCK_SIZE    64          /* images per pool task    */
+#define FEATURE_SIZE  (32 * 32)   /* legacy size for reading pixels */
 
 /* =========================================================
-   HIT: one candidate result (distance + global index)
+   HIT: one candidate result (L1 Manhattan distance)
    ========================================================= */
 
 typedef struct {
-    int dist;   /* squared Euclidean distance (max 66 586 624) */
-    int idx;    /* global image index for tie-breaking         */
+    int dist;   /* L1 Manhattan Distance (0 is perfect match) */
+    int idx;    /* global image index for tie-breaking        */
 } Hit;
 
 /* =========================================================
-   PUBLIC API  (implemented in common.c)
+   PUBLIC API
    ========================================================= */
 
-/*
- * Load a 32x32 PNG of any supported colour type into 1024
- * grayscale bytes.  Returns 1 on success, 0 on any error
- * (wrong size, corrupt, missing, unsupported).  Never crashes.
- */
 int load_gray32(const char *path, unsigned char *pixels);
 
-/*
- * Squared Euclidean distance between two 1024-byte vectors.
- * Result fits in a 32-bit int.
- */
-int sq_distance(const unsigned char *a, const unsigned char *b);
+/* Compute a 256-bin histogram from 1024 grayscale pixels. */
+void compute_histogram(const unsigned char *pixels, int *hist);
 
-/*
- * Insert a candidate into a sorted (best-first) top-k array.
- * Tie-break: lower index wins.
- */
+/* Compute L1 (Manhattan) distance between two 256-bin histograms. */
+int hist_distance(const int *h1, const int *h2);
+
 void topk_insert(Hit *top, int *n, Hit h);
-
-/*
- * Merge src[0..sn-1] into dst[0..*dn-1].  Both arrays are
- * sorted best-first.  *dn is updated.
- */
 void topk_merge(Hit *dst, int *dn, const Hit *src, int sn);
 
-/*
- * CLOCK_MONOTONIC seconds (high-resolution).
- */
 double now_sec(void);
-
-/*
- * Scan a directory for .png files.  Returns a sorted list
- * of basenames via scandir + alphasort.  Caller must free
- * each entry and the array.
- */
 int scan_png_dir(const char *dirpath, struct dirent ***out);
+
+/* legacy distance left here to avoid breaking compilation if used elsewhere */
+int sq_distance(const unsigned char *a, const unsigned char *b);
 
 #endif /* COMMON_H */
