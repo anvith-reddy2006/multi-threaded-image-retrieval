@@ -1,60 +1,108 @@
 # Multi-Threaded Image Retrieval
 
-This project implements a multi-threaded image retrieval system, comparing sequential, static multithreading, and phase-based thread-pool (producer-consumer) approaches.
+Content-based image retrieval over 5000 CIFAR-10 images (32x32 PNG). Each image is
+described by a 256-bin grayscale histogram; the query is compared with every database
+histogram using squared Euclidean distance and the top-5 closest images are returned.
+
+**Parallelism scope: data parallelism.** The image set is partitioned into chunks; every
+thread runs the same algorithm (decode + histogram, then distance + local top-K) on its
+chunk, and the per-thread top-K lists are merged into the final top-K.
+
+Four implementations are compared:
+
+| Binary | Description |
+|---|---|
+| `retrieval_seq` | Sequential baseline |
+| `retrieval_mt` | Static partitioning: N equal chunks, one thread per chunk |
+| `retrieval_pool` | Thread pool, bounded producer/consumer queue, blocks of 64 images, dynamic scheduling |
+| `retrieval_pool_barrier` | Same pool design, but one set of workers with a barrier between the indexing and search phases |
 
 ## Requirements
 
-- GCC (with C11 support)
+- GCC (C11/gnu11), `make`
 - libpng (`libpng-dev`)
-- Python 3 with `matplotlib` and `Pillow` (for dataset generation and graph plotting)
+- Python 3 with `Pillow`, `numpy`, `matplotlib`
 
-## Generating the Dataset
-
-To generate the dataset, run the provided Python script. It will download the real CIFAR-10 dataset (if not present) and convert 5000 images into standard `.png` format. 
+## 1. Dataset (5000 images)
 
 ```sh
 python3 src/convert_cifar10.py
 ```
-*(Note: Because the decoding workload is perfectly uniform across all these identical 32x32 images, a dynamic queue-based scheduler may not demonstrate a significant speedup over static load distribution. Using images of radically different sizes would show dynamic scheduling's advantage over static).*
+Downloads CIFAR-10, writes 5000 PNGs to `dataset/train/` and the query image `query.png`
+(an image that is *not* in the database).
 
-## Building
-
-To build all versions of the project, run:
+## 2. Build
 
 ```sh
 make all
 ```
 
-This will produce the following executables:
-- `retrieval_seq`: The sequential baseline.
-- `retrieval_mt`: The statically-partitioned multithreaded version.
-- `retrieval_pool`: The thread-pool based version using a bounded queue, block-based partitioning, and dynamic scheduling.
-
-## Running Tests
-
-To verify that all versions produce identical results across thread counts:
+## 3. Verify (do this before timing anything)
 
 ```sh
 ./verify.sh query.png
 ```
-(Do not time anything until this passes!)
+Checks that every version and thread count (1, 2, 4, 8, 16) returns exactly the same top-5
+as the sequential version.
 
-## Benchmarking
+## 4. Optional runtime settings (environment variables)
 
-To run the full suite (warm-up, 10 runs per configuration, median times), and save the results to a CSV file (including context switch logging):
+| Variable | Effect |
+|---|---|
+| `MAX_IMAGES=N` | Use only the first N files (sorted order) of `dataset/train`. Used for the data-size sweep. |
+| `SEARCH_REPEAT=R` | Scan the in-memory histograms R times in the search phase. Results are unchanged; it only enlarges the search workload so `t_search` becomes measurable (at 5000 images it is only a few ms, while PNG decoding dominates). |
+
+Example: `MAX_IMAGES=1000 SEARCH_REPEAT=50 ./retrieval_mt query.png 4`
+
+## 5. Query scenarios
+
+Queries must be **32x32 PNG** files.
 
 ```sh
-./benchmark.sh query.png
+python3 tools/make_queries.py        # default: database images 0, 1, 2
+./run_scenarios.sh
 ```
 
-This script will output `benchmark_results.csv`.
-*(Note: `T_total` explicitly leaves out sequential directory scanning and initial query image parsing. These serial setup costs represent Amdahl's Law in practice in the broader context).*
+`make_queries.py` writes to `queries/`:
+- `exact_<id>.png` - exact copy of a database image
+- `histeq_<id>.png` - histogram-equalised version
+- `gauss_<id>.png` - Gaussian-smoothed version (sigma = 1.0)
 
-## Generating Graphs
+`query.png` is the "same domain, different image" scenario.
 
-To plot `t_index`, `t_search`, and `t_total` execution time along with speedups from the generated CSV file using the statistically robust medians:
+`run_scenarios.sh` runs every query through all versions (2, 4, 8 threads), checks that all
+agree with sequential, prints the top-5 and the rank/distance of the source image, and writes
+`scenario_results.csv` (scenario, query_file, method, threads, rank, result_file, distance).
+
+Expected behaviour: the exact image is rank 1 with distance 0; a Gaussian-smoothed image
+changes the histogram only slightly (often still near the top); histogram equalisation
+changes the histogram strongly, so the source image usually is not retrieved - the
+grayscale histogram feature is not invariant to contrast changes.
+
+## 6. Benchmarking
+
+```sh
+sudo ./benchmark.sh query.png                    # data-size sweep: 500, 1000, 2500, 5000 images
+sudo ./benchmark.sh query.png search_repeat      # SEARCH_REPEAT = 1, 10, 50, 100 at full size
+```
+- 1 warm-up + `RUNS` runs (default 10) per configuration, medians are used for plots.
+- Runs use `nice -n -20` when permitted (hence `sudo`) to reduce interference from other
+  processes; otherwise a warning is printed. Close other programs while benchmarking.
+- `TASKSET_CPUS=0-3 ./benchmark.sh ...` additionally pins runs to those CPUs.
+- `RUNS=3 ./benchmark.sh ...` for a quick test; `CSV=name.csv` changes the output file.
+- Output: `benchmark_results.csv` (columns method, threads, images, search_repeat, run,
+  t_index, t_search, t_total, vol_csw, invol_csw) and `benchmark_meta.txt` (date, core count,
+  priority/pinning settings).
+
+`T_total` includes indexing and search but excludes directory scanning and query parsing
+(serial setup costs, Amdahl's law).
+
+## 7. Graphs
 
 ```sh
 python3 graphs/generate_graphs.py benchmark_results.csv
 ```
-This generates PNG graphs in the current directory.
+Writes PNGs to `graphs/output/`: time vs threads (`t_index`, `t_search`, `t_total`),
+`speedup`, `efficiency`, the crossover plots (`crossover_total`, `crossover_search`: time vs
+number of images, sequential vs 2/4/8 threads) and `search_repeat_scaling`. If you ran both
+benchmark modes into different CSV files, pass both files to the script.

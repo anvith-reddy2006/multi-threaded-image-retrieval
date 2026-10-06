@@ -13,7 +13,7 @@ if [ ! -f "$QUERY" ]; then
     exit 1
 fi
 
-for bin in retrieval_seq retrieval_mt retrieval_pool; do
+for bin in retrieval_seq retrieval_mt retrieval_pool retrieval_pool_barrier; do
     if [ ! -x "./$bin" ]; then
         echo "ERROR: ./$bin not found or not executable.  Run 'make all' first."
         exit 1
@@ -35,6 +35,7 @@ for t in "${THREADS[@]}"; do
 
     MT_OUT=$(./retrieval_mt "$QUERY" "$t" 2>/dev/null | grep '^[0-9]\.' | head -5)
     POOL_OUT=$(./retrieval_pool "$QUERY" "$t" 2>/dev/null | grep '^[0-9]\.' | head -5)
+    BARRIER_OUT=$(./retrieval_pool_barrier "$QUERY" "$t" 2>/dev/null | grep '^[0-9]\.' | head -5)
 
     if [ "$MT_OUT" != "$BASELINE" ]; then
         echo "FAIL: retrieval_mt at $t threads differs from sequential"
@@ -42,7 +43,7 @@ for t in "${THREADS[@]}"; do
         echo "  Got:      $MT_OUT"
         PASS=false
     else
-        echo "  retrieval_mt:   PASS"
+        echo "  retrieval_mt:          PASS"
     fi
 
     if [ "$POOL_OUT" != "$BASELINE" ]; then
@@ -51,7 +52,16 @@ for t in "${THREADS[@]}"; do
         echo "  Got:      $POOL_OUT"
         PASS=false
     else
-        echo "  retrieval_pool: PASS"
+        echo "  retrieval_pool:        PASS"
+    fi
+
+    if [ "$BARRIER_OUT" != "$BASELINE" ]; then
+        echo "FAIL: retrieval_pool_barrier at $t threads differs from sequential"
+        echo "  Expected: $BASELINE"
+        echo "  Got:      $BARRIER_OUT"
+        PASS=false
+    else
+        echo "  retrieval_pool_barrier: PASS"
     fi
 done
 
