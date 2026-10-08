@@ -1,108 +1,61 @@
-# Multi-Threaded Image Retrieval
+# Multi-Threaded Image Retrieval (histogram intersection)
 
-Content-based image retrieval over 5000 CIFAR-10 images (32x32 PNG). Each image is
-described by a 256-bin grayscale histogram; the query is compared with every database
-histogram using squared Euclidean distance and the top-5 closest images are returned.
+Content-based image retrieval over 5000 CIFAR-10 images (32x32 PNG).
+Each image is turned into a normalised 256-bin grayscale histogram, and the query is compared
+with every database image using **histogram intersection** (similarity = sum of the bin-wise
+minimum; 1.0000 = identical histograms, larger = more similar). The 5 most similar images are returned.
 
-**Parallelism scope: data parallelism.** The image set is partitioned into chunks; every
-thread runs the same algorithm (decode + histogram, then distance + local top-K) on its
-chunk, and the per-thread top-K lists are merged into the final top-K.
-
-Four implementations are compared:
+**Parallelism scope: data parallelism** - the database is split among threads, every thread runs the
+same similarity computation on its part, and the partial results are merged and sorted.
 
 | Binary | Description |
 |---|---|
 | `retrieval_seq` | Sequential baseline |
-| `retrieval_mt` | Static partitioning: N equal chunks, one thread per chunk |
-| `retrieval_pool` | Thread pool, bounded producer/consumer queue, blocks of 64 images, dynamic scheduling |
-| `retrieval_pool_barrier` | Same pool design, but one set of workers with a barrier between the indexing and search phases |
+| `retrieval_mt` | Static Pthreads: equal chunks, one thread per chunk |
+| `retrieval_pool` | Thread pool: producer + workers, bounded queue, dynamic scheduling |
+
+Only the similarity computation is timed (images are loaded into memory before the timer starts).
+Ties in similarity are ordered by file name, so all versions return identical top-5 lists.
 
 ## Requirements
+GCC, make, libpng (`sudo apt install build-essential libpng-dev`), Python 3 with `pillow numpy matplotlib`.
 
-- GCC (C11/gnu11), `make`
-- libpng (`libpng-dev`)
-- Python 3 with `Pillow`, `numpy`, `matplotlib`
-
-## 1. Dataset (5000 images)
-
+## Setup
 ```sh
-python3 src/convert_cifar10.py
-```
-Downloads CIFAR-10, writes 5000 PNGs to `dataset/train/` and the query image `query.png`
-(an image that is *not* in the database).
-
-## 2. Build
-
-```sh
+python3 src/convert_cifar10.py     # creates dataset/train (5000 images)
 make all
+chmod +x *.sh
 ```
+(Faster download: `aria2c -x 16 -s 16 -c https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz`
+in the project folder before running the converter.)
 
-## 3. Verify (do this before timing anything)
-
+## Running one query
 ```sh
-./verify.sh query.png
+./retrieval_seq  <query.png> <scenario>
+./retrieval_mt   <query.png> <scenario> <threads>      # 1..32
+./retrieval_pool <query.png> <scenario> <threads>      # 1..32
 ```
-Checks that every version and thread count (1, 2, 4, 8, 16) returns exactly the same top-5
-as the sequential version.
+Scenarios: 1 = original, 2 = histogram equalization, 3 = Gaussian smoothing, 4 = same domain / different image
+(scenarios 2 and 3 are applied to the query inside the program).
+Optional: `IMAGE_LIMIT=1000 ./retrieval_seq query.png 1` uses only the first 1000 database images
+(used for the data-size / crossover experiment).
 
-## 4. Optional runtime settings (environment variables)
+Query files: `query_absent.png` (not in the database), `query_scenario4.png` (scenario 4),
+`queries/present.png` (an exact copy of a database image; created automatically from the first database image).
 
-| Variable | Effect |
-|---|---|
-| `MAX_IMAGES=N` | Use only the first N files (sorted order) of `dataset/train`. Used for the data-size sweep. |
-| `SEARCH_REPEAT=R` | Scan the in-memory histograms R times in the search phase. Results are unchanged; it only enlarges the search workload so `t_search` becomes measurable (at 5000 images it is only a few ms, while PNG decoding dominates). |
-
-Example: `MAX_IMAGES=1000 SEARCH_REPEAT=50 ./retrieval_mt query.png 4`
-
-## 5. Query scenarios
-
-Queries must be **32x32 PNG** files.
-
+## Final experiments (run in this order, with sudo for `nice -n -20`)
 ```sh
-python3 tools/make_queries.py        # default: database images 0, 1, 2
-./run_scenarios.sh
+./verify.sh                        # 8. correctness: all versions give the same top-5, present/absent works
+sudo ./run_scenarios.sh            # 1,2. 4 scenarios x query present/absent x 3 implementations
+sudo ./benchmark.sh                # 1,3,4,5. thread scaling 1-32 + crossover (use: scaling | crossover | all)
+python3 graphs/generate_graphs.py  # 6. graphs -> graphs/output/
 ```
+Close other programs while benchmarking. Useful settings: `RUNS=10` (default for benchmark; 5 for scenarios),
+`THREADS=4` (scenario runs), `CROSS_THREADS="4 8"`, `TASKSET_CPUS=0-3` (pin to cores), `QUERY=`, `SCENARIO=`.
 
-`make_queries.py` writes to `queries/`:
-- `exact_<id>.png` - exact copy of a database image
-- `histeq_<id>.png` - histogram-equalised version
-- `gauss_<id>.png` - Gaussian-smoothed version (sigma = 1.0)
+Metrics (printed in every benchmark table): speedup = T_seq / T_par, overhead = T_par - T_seq,
+overhead % = (T_par - T_seq) / T_seq x 100. The crossover point (smallest data size where parallel
+beats sequential) is printed at the end of the crossover experiment and marked on the crossover graphs.
 
-`query.png` is the "same domain, different image" scenario.
-
-`run_scenarios.sh` runs every query through all versions (2, 4, 8 threads), checks that all
-agree with sequential, prints the top-5 and the rank/distance of the source image, and writes
-`scenario_results.csv` (scenario, query_file, method, threads, rank, result_file, distance).
-
-Expected behaviour: the exact image is rank 1 with distance 0; a Gaussian-smoothed image
-changes the histogram only slightly (often still near the top); histogram equalisation
-changes the histogram strongly, so the source image usually is not retrieved - the
-grayscale histogram feature is not invariant to contrast changes.
-
-## 6. Benchmarking
-
-```sh
-sudo ./benchmark.sh query.png                    # data-size sweep: 500, 1000, 2500, 5000 images
-sudo ./benchmark.sh query.png search_repeat      # SEARCH_REPEAT = 1, 10, 50, 100 at full size
-```
-- 1 warm-up + `RUNS` runs (default 10) per configuration, medians are used for plots.
-- Runs use `nice -n -20` when permitted (hence `sudo`) to reduce interference from other
-  processes; otherwise a warning is printed. Close other programs while benchmarking.
-- `TASKSET_CPUS=0-3 ./benchmark.sh ...` additionally pins runs to those CPUs.
-- `RUNS=3 ./benchmark.sh ...` for a quick test; `CSV=name.csv` changes the output file.
-- Output: `benchmark_results.csv` (columns method, threads, images, search_repeat, run,
-  t_index, t_search, t_total, vol_csw, invol_csw) and `benchmark_meta.txt` (date, core count,
-  priority/pinning settings).
-
-`T_total` includes indexing and search but excludes directory scanning and query parsing
-(serial setup costs, Amdahl's law).
-
-## 7. Graphs
-
-```sh
-python3 graphs/generate_graphs.py benchmark_results.csv
-```
-Writes PNGs to `graphs/output/`: time vs threads (`t_index`, `t_search`, `t_total`),
-`speedup`, `efficiency`, the crossover plots (`crossover_total`, `crossover_search`: time vs
-number of images, sequential vs 2/4/8 threads) and `search_repeat_scaling`. If you ran both
-benchmark modes into different CSV files, pass both files to the script.
+Outputs (not committed): `benchmark_table.txt`, `scenario_table.txt`, `benchmark_results.csv`,
+`scenario_times.csv`, `scenario_results.csv`, `benchmark_meta.txt` (core count, priority), `graphs/output/*.png`.

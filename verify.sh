@@ -1,74 +1,51 @@
 #!/bin/bash
 # =========================================================
-#  VERIFY.SH  —  check that all versions give identical top-5
+#  VERIFY.SH - correctness check (item 8 of the remaining work)
+#  For every query (present / absent / scenario-4) and every scenario 1-4,
+#  checks that Static Pthreads and Thread Pool return exactly the same
+#  top-5 (file names AND similarity values) as the Sequential version,
+#  for thread counts 1,2,4,8,16,32.
+#  Also checks: a query that is present in the database is found with
+#  similarity 1.0000 (scenario 1), and an absent query is not.
+#  Usage: ./verify.sh
 # =========================================================
-set -euo pipefail
+set -uo pipefail
+source ./common.sh
+ensure_setup
+PRIO=()          # correctness only - no need for priority
 
-QUERY="${1:-query.png}"
-THREADS=(1 2 4 8 16)
-PASS=true
+THREADS=(1 2 4 8 16 32)
+QUERIES=("present:$QUERY_PRESENT" "absent:$QUERY_ABSENT" "scenario4:$QUERY_S4")
+FAIL=0; TOTAL=0
 
-if [ ! -f "$QUERY" ]; then
-    echo "ERROR: query image '$QUERY' not found"
-    exit 1
-fi
-
-for bin in retrieval_seq retrieval_mt retrieval_pool retrieval_pool_barrier; do
-    if [ ! -x "./$bin" ]; then
-        echo "ERROR: ./$bin not found or not executable.  Run 'make all' first."
-        exit 1
-    fi
-done
-
-# Get sequential baseline (always deterministic)
-BASELINE=$(./retrieval_seq "$QUERY" 2>/dev/null | grep '^[0-9]\.' | head -5)
-if [ -z "$BASELINE" ]; then
-    echo "ERROR: Baseline run failed or returned no results."
-    exit 1
-fi
-echo "=== Sequential baseline ==="
-echo "$BASELINE"
-echo
-
-for t in "${THREADS[@]}"; do
-    echo "--- Threads: $t ---"
-
-    MT_OUT=$(./retrieval_mt "$QUERY" "$t" 2>/dev/null | grep '^[0-9]\.' | head -5)
-    POOL_OUT=$(./retrieval_pool "$QUERY" "$t" 2>/dev/null | grep '^[0-9]\.' | head -5)
-    BARRIER_OUT=$(./retrieval_pool_barrier "$QUERY" "$t" 2>/dev/null | grep '^[0-9]\.' | head -5)
-
-    if [ "$MT_OUT" != "$BASELINE" ]; then
-        echo "FAIL: retrieval_mt at $t threads differs from sequential"
-        echo "  Expected: $BASELINE"
-        echo "  Got:      $MT_OUT"
-        PASS=false
-    else
-        echo "  retrieval_mt:          PASS"
-    fi
-
-    if [ "$POOL_OUT" != "$BASELINE" ]; then
-        echo "FAIL: retrieval_pool at $t threads differs from sequential"
-        echo "  Expected: $BASELINE"
-        echo "  Got:      $POOL_OUT"
-        PASS=false
-    else
-        echo "  retrieval_pool:        PASS"
-    fi
-
-    if [ "$BARRIER_OUT" != "$BASELINE" ]; then
-        echo "FAIL: retrieval_pool_barrier at $t threads differs from sequential"
-        echo "  Expected: $BASELINE"
-        echo "  Got:      $BARRIER_OUT"
-        PASS=false
-    else
-        echo "  retrieval_pool_barrier: PASS"
-    fi
+for qe in "${QUERIES[@]}"; do
+    qtype=${qe%%:*}; qfile=${qe#*:}
+    for s in 1 2 3 4; do
+        BASE=$(run_prog seq "$qfile" "$s" 1 | get_top5)
+        if [ -z "$BASE" ]; then echo "FAIL: sequential gave no result ($qtype, scenario $s)"; FAIL=$((FAIL+1)); continue; fi
+        line="  [$qtype | scenario $s ${SCENARIO_NAMES[$s]}]"
+        bad=""
+        for impl in static pool; do
+            for t in "${THREADS[@]}"; do
+                TOTAL=$((TOTAL+1))
+                OUT=$(run_prog "$impl" "$qfile" "$s" "$t" | get_top5)
+                if [ "$OUT" != "$BASE" ]; then bad+=" $impl@$t"; FAIL=$((FAIL+1)); fi
+            done
+        done
+        if [ -z "$bad" ]; then echo "$line PASS (static+pool, all thread counts)"; else echo "$line FAIL:$bad"; fi
+        # sanity: present query found exactly (scenario 1 only)
+        if [ "$s" = "1" ]; then
+            top1=$(echo "$BASE" | head -1 | cut -d'|' -f3)
+            if [ "$qtype" = "present" ]; then
+                [ "$top1" = "1.0000" ] && echo "      present query found with similarity 1.0000: OK" \
+                                       || { echo "      FAIL: present query top-1 similarity is $top1 (expected 1.0000)"; FAIL=$((FAIL+1)); }
+            elif [ "$qtype" = "absent" ]; then
+                [ "$top1" != "1.0000" ] && echo "      absent query: best similarity $top1 (< 1.0000): OK" \
+                                        || { echo "      FAIL: absent query matched with 1.0000 - it is in the database"; FAIL=$((FAIL+1)); }
+            fi
+        fi
+    done
 done
 
 echo
-if $PASS; then
-    echo "ALL TESTS PASSED"
-else
-    echo "SOME TESTS FAILED"
-    exit 1
-fi
+if [ "$FAIL" -eq 0 ]; then echo "ALL TESTS PASSED ($TOTAL comparisons)"; else echo "$FAIL PROBLEM(S) FOUND"; exit 1; fi

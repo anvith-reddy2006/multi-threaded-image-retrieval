@@ -3,23 +3,21 @@ CFLAGS  = -Wall -Wextra -O2 -std=gnu11
 LDFLAGS = -lpng -lm -lpthread
 
 SRC     = src
-COMMON  = $(SRC)/common.c
+IMG     = $(SRC)/common/image_processing.c
+IMGH    = $(SRC)/common/image_processing.h
 
 .PHONY: all clean
 
-all: retrieval_seq retrieval_mt retrieval_pool retrieval_pool_barrier
+all: retrieval_seq retrieval_mt retrieval_pool
 
-retrieval_seq: $(SRC)/sequential/retrieval.c $(COMMON) $(SRC)/common.h
-	$(CC) $(CFLAGS) -o $@ $(SRC)/sequential/retrieval.c $(COMMON) $(LDFLAGS)
+retrieval_seq: $(SRC)/sequential/retrieval.c $(IMG) $(IMGH)
+	$(CC) $(CFLAGS) -o $@ $(SRC)/sequential/retrieval.c $(IMG) $(LDFLAGS)
 
-retrieval_mt: $(SRC)/multithreading/retrieval_mt.c $(COMMON) $(SRC)/common.h
-	$(CC) $(CFLAGS) -o $@ $(SRC)/multithreading/retrieval_mt.c $(COMMON) $(LDFLAGS)
+retrieval_mt: $(SRC)/multithreading/retrieval_mt.c $(IMG) $(IMGH)
+	$(CC) $(CFLAGS) -o $@ $(SRC)/multithreading/retrieval_mt.c $(IMG) $(LDFLAGS)
 
-retrieval_pool: $(SRC)/threadpool/retrieval_threadpool.c $(COMMON) $(SRC)/common.h
-	$(CC) $(CFLAGS) -o $@ $(SRC)/threadpool/retrieval_threadpool.c $(COMMON) $(LDFLAGS)
-
-retrieval_pool_barrier: $(SRC)/threadpool/retrieval_pool_barrier.c $(COMMON) $(SRC)/common.h
-	$(CC) $(CFLAGS) -o $@ $(SRC)/threadpool/retrieval_pool_barrier.c $(COMMON) $(LDFLAGS)
+retrieval_pool: $(SRC)/threadpool/retrieval_threadpool.c $(IMG) $(IMGH)
+	$(CC) $(CFLAGS) -o $@ $(SRC)/threadpool/retrieval_threadpool.c $(IMG) $(LDFLAGS)
 
 clean:
-	rm -f retrieval_seq retrieval_mt retrieval_pool retrieval_pool_barrier
+	rm -f retrieval_seq retrieval_mt retrieval_pool

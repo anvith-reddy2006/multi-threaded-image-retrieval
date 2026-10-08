@@ -1,140 +1,158 @@
 #!/usr/bin/env python3
 """
-Plots from benchmark CSV(s) (medians over runs). Output: graphs/output/*.png
+Graphs for the final report (item 6 of the remaining work).
+Reads  benchmark_results.csv  (from ./benchmark.sh)  and  scenario_times.csv  (from ./run_scenarios.sh).
+Writes PNGs to graphs/output/.
 
-Usage: python3 graphs/generate_graphs.py benchmark_results.csv [more.csv ...]
-
-CSV columns: method,threads,images,search_repeat,run,t_index,t_search,t_total,vol_csw,invol_csw
-(old CSVs without 'images'/'search_repeat' are also accepted.)
+Usage:  python3 graphs/generate_graphs.py [--threads 4]
+        --threads N : thread count used for the "vs Implementation" bar charts (default 4)
 
 Graphs:
-  t_index / t_search / t_total vs threads   (largest image count, search_repeat=1)
-  speedup.png, efficiency.png               (t_total based, same slice)
-  crossover_total.png, crossover_search.png time vs number of images
-                                            (sequential vs 2/4/8 threads)  [needs MAX_IMAGES sweep]
-  search_repeat_scaling.png                 t_search vs SEARCH_REPEAT       [needs search_repeat mode]
+  1 exec_time_vs_implementation.png   Execution Time vs Implementation
+  2 speedup_vs_implementation.png     Speedup vs Implementation
+  3 overhead_vs_implementation.png    Overhead vs Implementation
+  4 exec_time_vs_threads.png          Execution Time vs Number of Threads
+  5 static_vs_pool_scaling.png        Static Pthread vs Thread Pool scaling (speedup)
+  6 crossover_<T>threads.png          crossover point (time vs data size)
+  7 scenario_times.png                scenario-wise execution times
 """
-import csv, sys, statistics
+import argparse, csv, os, statistics
 from collections import defaultdict
 from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-if len(sys.argv) < 2:
-    print(f"Usage: python {sys.argv[0]} benchmark_results.csv [more.csv ...]")
-    sys.exit(1)
+ap = argparse.ArgumentParser()
+ap.add_argument("--threads", type=int, default=4)
+ap.add_argument("--bench", default="benchmark_results.csv")
+ap.add_argument("--scen", default="scenario_times.csv")
+args = ap.parse_args()
 
-# data[(method, threads, images, sr)][field] -> list of values
-data = defaultdict(lambda: defaultdict(list))
-for path in sys.argv[1:]:
-    with open(path, newline="") as f:
-        for row in csv.DictReader(f):
-            key = (row["method"], int(row["threads"]),
-                   int(row.get("images") or 0), int(row.get("search_repeat") or 1))
-            for fld in ("t_index", "t_search", "t_total"):
-                data[key][fld].append(float(row[fld]))
-
-if not data:
-    sys.exit("No data rows found.")
-
-def med(method, t, img, sr, fld):
-    v = data.get((method, t, img, sr), {}).get(fld)
-    return statistics.median(v) if v else None
-
-METHODS = [("static", "Static MT"), ("pool", "Thread Pool"), ("pool_barrier", "Barrier Pool")]
 out = Path(__file__).resolve().parent / "output"
 out.mkdir(parents=True, exist_ok=True)
-
-all_images = sorted({k[2] for k in data})
-all_sr = sorted({k[3] for k in data})
-threads = sorted({k[1] for k in data if k[0] != "sequential"})
-max_img = max(all_images)
+COL = {"sequential": "tab:gray", "static": "tab:blue", "pool": "tab:orange"}
+LAB = {"sequential": "Sequential", "static": "Static Pthreads", "pool": "Thread Pool"}
 
 def save(name):
-    plt.tight_layout()
-    plt.savefig(out / name, dpi=300)
-    plt.close()
+    plt.tight_layout(); plt.savefig(out / name, dpi=300); plt.close()
+    print("  wrote", out / name)
 
-# ---- 1. metrics vs threads (largest dataset, search_repeat = 1) ------------
-seq = {f: med("sequential", 1, max_img, 1, f) for f in ("t_index", "t_search", "t_total")}
+# ------------------------------------------------------------------ benchmark data
+raw = defaultdict(list)           # (experiment, method, threads, images) -> [times]
+if os.path.exists(args.bench):
+    with open(args.bench, newline="") as f:
+        for r in csv.DictReader(f):
+            raw[(r["experiment"], r["method"], int(r["threads"]), int(r["images"]))].append(float(r["time_s"]))
+med = {k: statistics.median(v) for k, v in raw.items()}
 
-def vs_threads(fld, title, fname):
+scal = {k: v for k, v in med.items() if k[0] == "scaling"}
+if scal:
+    N = max(k[3] for k in scal)
+    seq = scal[("scaling", "seq", 1, N)]
+    threads = sorted({k[2] for k in scal if k[1] != "seq"})
+    T = args.threads if args.threads in threads else threads[len(threads) // 2]
+    if T != args.threads:
+        print(f"note: --threads {args.threads} not benchmarked, using {T}")
+    st, po = scal[("scaling", "static", T, N)], scal[("scaling", "pool", T, N)]
+
+    # 1 execution time vs implementation
+    plt.figure(figsize=(7, 5))
+    vals = [seq, st, po]; names = ["Sequential", f"Static Pthreads\n({T} threads)", f"Thread Pool\n({T} threads)"]
+    bars = plt.bar(names, vals, color=[COL["sequential"], COL["static"], COL["pool"]])
+    for b, v in zip(bars, vals):
+        plt.text(b.get_x() + b.get_width() / 2, v, f"{v*1000:.2f} ms", ha="center", va="bottom")
+    plt.ylabel("Execution time (s)"); plt.title(f"Execution time vs implementation ({N} images)")
+    save("exec_time_vs_implementation.png")
+
+    # 2 speedup vs implementation
+    plt.figure(figsize=(7, 5))
+    sp = [seq / st, seq / po]
+    bars = plt.bar([f"Static Pthreads\n({T} threads)", f"Thread Pool\n({T} threads)"], sp, color=[COL["static"], COL["pool"]])
+    plt.axhline(1.0, color="black", linestyle="--", label="Sequential (speedup = 1)")
+    for b, v in zip(bars, sp):
+        plt.text(b.get_x() + b.get_width() / 2, v, f"{v:.2f}x", ha="center", va="bottom")
+    plt.ylabel("Speedup = T_seq / T_parallel"); plt.title(f"Speedup vs implementation ({N} images)"); plt.legend()
+    save("speedup_vs_implementation.png")
+
+    # 3 overhead vs implementation
+    plt.figure(figsize=(7, 5))
+    ovp = [(st - seq) / seq * 100, (po - seq) / seq * 100]
+    ovs = [st - seq, po - seq]
+    bars = plt.bar([f"Static Pthreads\n({T} threads)", f"Thread Pool\n({T} threads)"], ovp, color=[COL["static"], COL["pool"]])
+    plt.axhline(0, color="black")
+    for b, p, s in zip(bars, ovp, ovs):
+        plt.text(b.get_x() + b.get_width() / 2, p, f"{p:+.1f}%\n({s*1000:+.2f} ms)", ha="center",
+                 va="bottom" if p >= 0 else "top")
+    plt.ylabel("Overhead % = (T_par - T_seq) / T_seq x 100")
+    plt.title(f"Overhead vs implementation ({N} images)\n(positive = slower than sequential, negative = gain)")
+    save("overhead_vs_implementation.png")
+
+    # 4 execution time vs threads
+    pos = range(len(threads))
     plt.figure(figsize=(8, 5))
-    if seq[fld] is not None:
-        plt.axhline(seq[fld], linestyle="--", color="gray", label="Sequential")
-    for m, label in METHODS:
-        ys = [med(m, t, max_img, 1, fld) for t in threads]
-        if any(y is not None for y in ys):
-            pts = [(t, y) for t, y in zip(threads, ys) if y is not None]
-            plt.plot(*zip(*pts), marker="o", label=label)
-    plt.xlabel("Number of threads"); plt.ylabel("Time (s)")
-    plt.title(f"{title} ({max_img} images)")
-    plt.xticks(threads); plt.grid(True); plt.legend()
-    save(fname)
+    plt.axhline(seq, linestyle="--", color=COL["sequential"], label="Sequential")
+    for m in ("static", "pool"):
+        plt.plot(pos, [scal[("scaling", m, t, N)] for t in threads], marker="o", color=COL[m], label=LAB[m])
+    plt.xticks(pos, threads); plt.xlabel("Number of threads"); plt.ylabel("Execution time (s)")
+    plt.title(f"Execution time vs number of threads ({N} images)"); plt.grid(True); plt.legend()
+    save("exec_time_vs_threads.png")
 
-vs_threads("t_index", "Indexing time (PNG decode + histogram)", "t_index.png")
-vs_threads("t_search", "Search time (distance + top-K)", "t_search.png")
-vs_threads("t_total", "Total execution time", "t_total.png")
-
-if seq["t_total"] is not None:
+    # 5 static vs pool scaling (speedup)
     plt.figure(figsize=(8, 5))
-    for m, label in METHODS:
-        pts = [(t, seq["t_total"] / med(m, t, max_img, 1, "t_total")) for t in threads
-               if med(m, t, max_img, 1, "t_total")]
-        if pts:
-            plt.plot(*zip(*pts), marker="o", label=label)
-    plt.plot(threads, threads, linestyle="--", color="black", label="Ideal")
-    plt.xlabel("Number of threads"); plt.ylabel("Speedup vs sequential")
-    plt.title(f"Total speedup ({max_img} images)")
-    plt.xticks(threads); plt.grid(True); plt.legend()
-    save("speedup.png")
+    for m in ("static", "pool"):
+        plt.plot(pos, [seq / scal[("scaling", m, t, N)] for t in threads], marker="o", color=COL[m], label=LAB[m])
+    plt.plot(pos, threads, linestyle=":", color="black", label="Ideal (speedup = threads)")
+    plt.axhline(1.0, linestyle="--", color=COL["sequential"], label="Sequential")
+    plt.xticks(pos, threads); plt.xlabel("Number of threads"); plt.ylabel("Speedup")
+    plt.title(f"Static Pthreads vs Thread Pool scaling ({N} images)"); plt.grid(True); plt.legend()
+    save("static_vs_pool_scaling.png")
+else:
+    print("no 'scaling' data found - run: sudo ./benchmark.sh scaling")
 
+# 6 crossover
+cross = {k: v for k, v in med.items() if k[0] == "crossover"}
+for t in sorted({k[2] for k in cross if k[1] != "seq"}):
+    sizes = sorted({k[3] for k in cross})
     plt.figure(figsize=(8, 5))
-    for m, label in METHODS:
-        pts = [(t, seq["t_total"] / med(m, t, max_img, 1, "t_total") / t * 100) for t in threads
-               if med(m, t, max_img, 1, "t_total")]
-        if pts:
-            plt.plot(*zip(*pts), marker="o", label=label)
-    plt.xlabel("Number of threads"); plt.ylabel("Efficiency (%)")
-    plt.title(f"Parallel efficiency ({max_img} images)")
-    plt.xticks(threads); plt.grid(True); plt.legend()
-    save("efficiency.png")
+    plt.plot(sizes, [cross[("crossover", "seq", 1, n)] for n in sizes], marker="s", color=COL["sequential"], linewidth=2, label="Sequential")
+    notes = []
+    for m in ("static", "pool"):
+        ys = [cross[("crossover", m, t, n)] for n in sizes]
+        plt.plot(sizes, ys, marker="o", color=COL[m], label=f"{LAB[m]} ({t} threads)")
+        x = next((n for n, y in zip(sizes, ys) if y < cross[("crossover", "seq", 1, n)]), None)
+        if x is not None:
+            plt.axvline(x, linestyle="--", color=COL[m], alpha=0.8)
+            plt.annotate(f"{LAB[m]} crossover\n~{x} images", (x, cross[("crossover", m, t, x)]),
+                         textcoords="offset points", xytext=(8, 22 if m == "static" else 48), color=COL[m],
+                         arrowprops=dict(arrowstyle="->", color=COL[m]))
+        else:
+            notes.append(f"{LAB[m]}: no crossover up to {sizes[-1]} images")
+    if notes:
+        plt.text(0.02, 0.97, "\n".join(notes), transform=plt.gca().transAxes, va="top", fontsize=9)
+    plt.xscale("log"); plt.yscale("log")
+    plt.xlabel("Number of images (log scale)"); plt.ylabel("Execution time (s, log scale)")
+    plt.title(f"Crossover point: where parallel beats sequential ({t} threads)"); plt.grid(True, which="both", alpha=0.4); plt.legend(loc="lower right")
+    save(f"crossover_{t}threads.png")
+if not cross:
+    print("no 'crossover' data found - run: sudo ./benchmark.sh crossover")
 
-# ---- 2. crossover: time vs number of images --------------------------------
-if len(all_images) > 1:
-    for fld, title, fname in (("t_total", "Total time vs data size", "crossover_total.png"),
-                              ("t_search", "Search time vs data size", "crossover_search.png")):
-        plt.figure(figsize=(8, 5))
-        pts = [(n, med("sequential", 1, n, 1, fld)) for n in all_images if med("sequential", 1, n, 1, fld)]
-        if pts:
-            plt.plot(*zip(*pts), marker="s", color="black", linewidth=2, label="Sequential")
-        for t in (2, 4, 8):
-            if t not in threads:
-                continue
-            pts = [(n, med("static", t, n, 1, fld)) for n in all_images if med("static", t, n, 1, fld)]
-            if pts:
-                plt.plot(*zip(*pts), marker="o", label=f"Static MT, {t} threads")
-        plt.xlabel("Number of images"); plt.ylabel("Time (s)")
-        plt.title(title); plt.grid(True); plt.legend()
-        save(fname)
-
-# ---- 3. search time vs SEARCH_REPEAT ---------------------------------------
-sr_vals = [s for s in all_sr if s >= 1]
-if len(sr_vals) > 1:
-    plt.figure(figsize=(8, 5))
-    pts = [(s, med("sequential", 1, max_img, s, "t_search")) for s in sr_vals if med("sequential", 1, max_img, s, "t_search")]
-    if pts:
-        plt.plot(*zip(*pts), marker="s", color="black", linewidth=2, label="Sequential")
-    for t in (2, 4, 8):
-        if t not in threads:
-            continue
-        pts = [(s, med("static", t, max_img, s, "t_search")) for s in sr_vals if med("static", t, max_img, s, "t_search")]
-        if pts:
-            plt.plot(*zip(*pts), marker="o", label=f"Static MT, {t} threads")
-    plt.xlabel("SEARCH_REPEAT (search workload multiplier)"); plt.ylabel("t_search (s)")
-    plt.title(f"Search time vs workload size ({max_img} images)")
-    plt.grid(True); plt.legend()
-    save("search_repeat_scaling.png")
-
-print(f"Graphs written to {out}/ (medians over runs)")
+# 7 scenario-wise times
+if os.path.exists(args.scen):
+    rows = list(csv.DictReader(open(args.scen, newline="")))
+    keys = []
+    for r in rows:
+        k = (r["scenario"], r["query_type"])
+        if k not in keys:
+            keys.append(k)
+    labels = [f"S{s}\n{q}" for s, q in keys]
+    plt.figure(figsize=(10, 5))
+    w = 0.27
+    for i, m in enumerate(("seq", "static", "pool")):
+        ys = [float(next(r["median_time_s"] for r in rows if (r["scenario"], r["query_type"]) == k and r["method"] == m)) for k in keys]
+        plt.bar([x + (i - 1) * w for x in range(len(keys))], ys, w, label=LAB["sequential" if m == "seq" else m], color=COL["sequential" if m == "seq" else m])
+    plt.xticks(range(len(keys)), labels); plt.ylabel("Execution time (s)")
+    plt.title("Scenario-wise execution time (query present / absent)"); plt.legend(); plt.grid(True, axis="y", alpha=0.4)
+    save("scenario_times.png")
+else:
+    print("no scenario_times.csv - run: sudo ./run_scenarios.sh")

@@ -30,3 +30,18 @@ retrieval_pool_barrier
 sr.csv
 sr_table.txt
 benchmark_table.txt
+
+# generated files
+retrieval_seq
+retrieval_mt
+retrieval_pool
+*.o
+queries/
+benchmark_results.csv
+benchmark_table.txt
+benchmark_meta.txt
+scenario_table.txt
+scenario_times.csv
+scenario_results.csv
+graphs/output/
+*:Zone.Identifier
