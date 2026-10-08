@@ -230,8 +230,7 @@ int compare_results(const void *a,
     if (x->distance < y->distance)
         return 1;
 
-    /* equal similarity: order by file name so every version gives the same top-5 */
-    return strcmp(x->filename, y->filename);
+    return 0;
 }
 
 int main(int argc, char *argv[])
@@ -359,8 +358,7 @@ else if (scenario == 4) {
     struct dirent *entry;
 
     int image_count = 0;
-    const int image_cap = get_image_limit(MAX_IMAGES);
-
+    int image_limit = get_image_limit(MAX_IMAGES);
     printf(
         "=== STATIC MULTITHREADED IMAGE RETRIEVAL ===\n"
     );
@@ -368,7 +366,7 @@ else if (scenario == 4) {
     /* Find images. */
     while ((entry = readdir(dir)) != NULL) {
 
-        if (image_count >= image_cap)
+        if (image_count >= image_limit)
             break;
 
         if (strstr(

@@ -1,6 +1,5 @@
 #include "image_processing.h"
 #include <stdlib.h>
-
 void calculate_histogram(const unsigned char *image,
                          int size,
                          double histogram[HISTOGRAM_BINS])
@@ -126,19 +125,19 @@ void gaussian_smoothing(
 
             output[y * width + x] = (unsigned char)sum;
         }
-    }
-}
-
+     }
+  }
 int get_image_limit(int default_max)
 {
     const char *env = getenv("IMAGE_LIMIT");
 
-    if (env) {
-        int v = atoi(env);
+    if (env == NULL)
+        return default_max;
 
-        if (v >= 1 && v < default_max)
-            return v;
-    }
+    int limit = atoi(env);
 
-    return default_max;
+    if (limit <= 0 || limit > default_max)
+        return default_max;
+
+    return limit;
 }

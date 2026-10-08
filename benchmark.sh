@@ -1,138 +1,240 @@
 #!/bin/bash
-# =========================================================
-#  BENCHMARK.SH - items 1, 3, 4, 5 of the remaining work
-#
-#  Experiment 1 "scaling"  : Static Pthreads and Thread Pool with
-#                            1, 2, 4, 8, 16, 32 threads on the full dataset
-#  Experiment 2 "crossover": execution time vs number of images
-#                            (IMAGE_LIMIT = 100 ... 5000) for Sequential,
-#                            Static and Pool -> finds the crossover point
-#                            where parallel execution becomes beneficial.
-#
-#  Metrics (computed per row, parallel vs sequential, same conditions):
-#     speedup      = sequential time / parallel time
-#     overhead     = parallel time - sequential time        (negative = gain)
-#     overhead %   = (parallel - sequential) / sequential * 100
-#
-#  Usage:   sudo ./benchmark.sh [scaling|crossover|all]      (default: all)
-#           (sudo => every run uses  nice -n -20 )
-#  Env:     RUNS=10  SCENARIO=1  QUERY=queries/present.png
-#           CROSS_THREADS="4 8"  TASKSET_CPUS=0-3 (optional pinning)
-#  Output:  live tables on screen, benchmark_table.txt,
-#           benchmark_results.csv (every single run), benchmark_meta.txt
-# =========================================================
-set -uo pipefail
-source ./common.sh
-ensure_setup
-setup_priority
 
-MODE="${1:-all}"
-case $MODE in scaling|crossover|all) ;; *) echo "Usage: $0 [scaling|crossover|all]"; exit 1;; esac
+set -e
 
 RUNS="${RUNS:-10}"
-SCENARIO="${SCENARIO:-1}"
-QUERY="${QUERY:-$QUERY_PRESENT}"
-SCALE_THREADS=(1 2 4 8 16 32)
-CROSS_THREADS=(${CROSS_THREADS:-4 8})
-ALL_SIZES=(100 250 500 1000 2500 5000 7500 10000)
-CSV="benchmark_results.csv"; TABLE="benchmark_table.txt"; META="benchmark_meta.txt"
+THREADS=(1 2 4 8 16 32)
+IMAGE_SIZES=(100 250 500 1000 2500 5000 7500 10000)
 
-TOTAL_IMAGES=$(ls dataset/train/*.png | wc -l)
-SIZES=(); for n in "${ALL_SIZES[@]}"; do [ "$n" -le "$TOTAL_IMAGES" ] && SIZES+=("$n"); done
-[ "${SIZES[-1]}" -ne "$TOTAL_IMAGES" ] && SIZES+=("$TOTAL_IMAGES")
+QUERY="query.png"
+SCENARIO=1
 
-{
-    echo "date:       $(date -Iseconds)"
-    echo "mode:       $MODE"
-    echo "runs:       $RUNS (+1 warm-up per configuration)"
-    echo "cpu cores:  $(nproc 2>/dev/null || echo unknown)"
-    echo "priority:   $PRIO_NOTE"
-    echo "pinning:    $PIN_NOTE"
-    echo "dataset:    $TOTAL_IMAGES images"
-    echo "query:      $QUERY   scenario: $SCENARIO (${SCENARIO_NAMES[$SCENARIO]})"
-} > "$META"
-cat "$META"
+CSV="benchmark_results.csv"
+TABLE="benchmark_table.txt"
+META="benchmark_meta.txt"
 
-echo "experiment,method,threads,images,scenario,run,time_s" > "$CSV"
-: > "$TABLE"
-declare -A MED       # MED[experiment|method|threads|images] = median time
+echo "================================================="
+echo " MULTI-THREADED IMAGE RETRIEVAL BENCHMARK"
+echo "================================================="
 
-# bench EXPERIMENT IMPL THREADS IMAGES   -> stores median, appends raw runs to CSV
-bench() {
-    local exp=$1 impl=$2 t=$3 n=$4 th=$3 times="" r v
-    [ "$impl" = "seq" ] && th=1
-    IMAGE_LIMIT=$n run_prog "$impl" "$QUERY" "$SCENARIO" "$th" >/dev/null     # warm-up
-    for ((r=1; r<=RUNS; r++)); do
-        v=$(IMAGE_LIMIT=$n run_prog "$impl" "$QUERY" "$SCENARIO" "$th" | get_time)
-        echo "$exp,$impl,$th,$n,$SCENARIO,$r,$v" >> "$CSV"
-        times+="$v"$'\n'
-    done
-    MED["$exp|$impl|$th|$n"]=$(printf '%s' "$times" | median)
-}
+if [ ! -f "$QUERY" ]; then
+    echo "ERROR: $QUERY not found"
+    exit 1
+fi
 
-pr() { printf "$@" | tee -a "$TABLE"; }
-header() {  # title, first column name
-    { echo; echo "=== $1 ==="
-      printf "%-8s %-8s %6s %12s %9s %13s %11s\n" "$2" method threads "time(s)" speedup "overhead(s)" "overhead%"
-      printf "%-8s %-8s %6s %12s %9s %13s %11s\n" -------- -------- ------ ------------ --------- ------------- -----------; } | tee -a "$TABLE"
-}
-row() {  # label method threads time seq_time
-    local lab=$1 m=$2 t=$3 tm=$4 sq=$5 sp ov ovp
-    if [ "$m" = "sequential" ]; then sp="-"; ov="-"; ovp="-"
-    else
-        sp=$(awk -v s="$sq" -v p="$tm" 'BEGIN{printf "%.2f", s/p}')
-        ov=$(awk -v s="$sq" -v p="$tm" 'BEGIN{printf "%+.6f", p-s}')
-        ovp=$(awk -v s="$sq" -v p="$tm" 'BEGIN{printf "%+.1f", (p-s)/s*100}')
+for bin in retrieval_seq retrieval_mt retrieval_threadpool; do
+    if [ ! -x "./$bin" ]; then
+        echo "ERROR: ./$bin not found"
+        exit 1
     fi
-    printf "%-8s %-8s %6s %12.6f %9s %13s %11s\n" "$lab" "$m" "$t" "$tm" "$sp" "$ov" "$ovp" | tee -a "$TABLE"
+done
+
+TOTAL_IMAGES=$(find dataset/train -maxdepth 1 -name "*.png" | wc -l)
+
+echo "Dataset images: $TOTAL_IMAGES"
+echo "Runs: $RUNS (+1 warm-up)"
+echo "Thread counts: ${THREADS[*]}"
+echo "Nice priority: -20"
+echo
+
+echo "date: $(date -Iseconds)" > "$META"
+echo "runs: $RUNS (+1 warm-up)" >> "$META"
+echo "dataset: $TOTAL_IMAGES images" >> "$META"
+echo "query: $QUERY" >> "$META"
+echo "scenario: $SCENARIO" >> "$META"
+echo "threads: ${THREADS[*]}" >> "$META"
+
+echo "images,method,threads,time,speedup,overhead,overhead_percent" > "$CSV"
+> "$TABLE"
+
+median()
+{
+    sort -n | awk '
+    {
+        a[NR]=$1
+    }
+    END {
+        if (NR % 2 == 1)
+            printf "%.6f\n", a[(NR+1)/2]
+        else
+            printf "%.6f\n", (a[NR/2] + a[NR/2+1])/2
+    }'
 }
 
-echo; echo "======== BENCHMARK ($MODE) ========"
+run_seq()
+{
+    local images=$1
 
-# ---------------- Experiment 1: thread scaling ----------------
-if [ "$MODE" = "scaling" ] || [ "$MODE" = "all" ]; then
-    header "Thread scaling: $TOTAL_IMAGES images (median of $RUNS runs)" images
-    bench scaling seq 1 "$TOTAL_IMAGES"
-    SEQ=${MED["scaling|seq|1|$TOTAL_IMAGES"]}
-    row "$TOTAL_IMAGES" sequential 1 "$SEQ" "$SEQ"
-    for impl in static pool; do
-        for t in "${SCALE_THREADS[@]}"; do
-            bench scaling $impl "$t" "$TOTAL_IMAGES"
-            row "$TOTAL_IMAGES" $impl "$t" "${MED["scaling|$impl|$t|$TOTAL_IMAGES"]}" "$SEQ"
-        done
-    done
-fi
+    sudo env IMAGE_LIMIT="$images" nice -n -20 ./retrieval_seq "$QUERY" "$SCENARIO" \
+        > /dev/null
 
-# ---------------- Experiment 2: crossover ----------------
-if [ "$MODE" = "crossover" ] || [ "$MODE" = "all" ]; then
-    for t in "${CROSS_THREADS[@]}"; do
-        header "Crossover: execution time vs data size, $t threads (median of $RUNS runs)" images
-        for n in "${SIZES[@]}"; do
-            [ -z "${MED["crossover|seq|1|$n"]:-}" ] && bench crossover seq 1 "$n"
-            SQ=${MED["crossover|seq|1|$n"]}
-            row "$n" sequential 1 "$SQ" "$SQ"
-            for impl in static pool; do
-                bench crossover $impl "$t" "$n"
-                row "$n" $impl "$t" "${MED["crossover|$impl|$t|$n"]}" "$SQ"
-            done
-        done
+    times=""
+
+    for ((r=1; r<=RUNS; r++)); do
+        output=$(sudo env IMAGE_LIMIT="$images" nice -n -20 ./retrieval_seq "$QUERY" "$SCENARIO")
+
+        time=$(echo "$output" | grep "Execution Time:" | awk '{print $3}')
+
+        times="${times}${time}"$'\n'
     done
-    {
-    echo; echo "=== CROSSOVER POINT (smallest data size where parallel is faster than sequential) ==="
-    for t in "${CROSS_THREADS[@]}"; do
-        for impl in static pool; do
-            found="none up to $TOTAL_IMAGES images (sequential is faster everywhere)"
-            for n in "${SIZES[@]}"; do
-                if awk -v p="${MED["crossover|$impl|$t|$n"]}" -v s="${MED["crossover|seq|1|$n"]}" 'BEGIN{exit !(p<s)}'; then
-                    found="$n images"; break
-                fi
-            done
-            printf "  %-7s with %2s threads: %s\n" "$impl" "$t" "$found"
-        done
+
+    echo "$times" | median
+}
+
+run_static()
+{
+    local images=$1
+    local threads=$2
+
+    sudo env IMAGE_LIMIT="$images" nice -n -20 ./retrieval_mt "$QUERY" "$SCENARIO" "$threads" \
+        > /dev/null
+
+    times=""
+
+    for ((r=1; r<=RUNS; r++)); do
+        output=$(sudo env IMAGE_LIMIT="$images" nice -n -20 ./retrieval_mt "$QUERY" "$SCENARIO" "$threads")
+
+        time=$(echo "$output" | grep "Execution Time:" | awk '{print $3}')
+
+        times="${times}${time}"$'\n'
     done
-    } | tee -a "$TABLE"
-fi
+
+    echo "$times" | median
+}
+
+run_pool()
+{
+    local images=$1
+    local threads=$2
+
+    sudo env IMAGE_LIMIT="$images" nice -n -20 ./retrieval_threadpool "$QUERY" "$SCENARIO" "$threads" \
+        > /dev/null
+
+    times=""
+
+    for ((r=1; r<=RUNS; r++)); do
+        output=$(sudo env IMAGE_LIMIT="$images" nice -n -20 ./retrieval_threadpool "$QUERY" "$SCENARIO" "$threads")
+
+        time=$(echo "$output" | grep -i "Execution time:" | awk '{print $3}')
+
+        times="${times}${time}"$'\n'
+    done
+
+    echo "$times" | median
+}
+
+calculate_metrics()
+{
+    local seq=$1
+    local parallel=$2
+
+    awk -v s="$seq" -v p="$parallel" '
+    BEGIN {
+        speedup=s/p
+        overhead=p-s
+        overhead_percent=(overhead/s)*100
+
+        printf "%.2f %.6f %.2f\n",
+               speedup,
+               overhead,
+               overhead_percent
+    }'
+}
 
 echo
-echo "Saved: $CSV (all runs), $TABLE (tables), $META"
-echo "Next:  python3 graphs/generate_graphs.py"
+echo "================ THREAD SCALING ================"
+echo
+
+echo "images  method       threads  time(s)   speedup   overhead(s)  overhead%"
+echo "------  -----------  -------  --------  --------  -----------  ---------"
+
+IMAGE_LIMIT=10000
+
+SEQ_TIME=$(run_seq $IMAGE_LIMIT)
+
+printf "%-7s %-12s %-8s %-9s %-9s %-12s %-10s\n" \
+    "$IMAGE_LIMIT" "sequential" "1" "$SEQ_TIME" "-" "-" "-"
+
+for threads in "${THREADS[@]}"; do
+
+    STATIC_TIME=$(run_static $IMAGE_LIMIT $threads)
+    METRICS=$(calculate_metrics "$SEQ_TIME" "$STATIC_TIME")
+
+    SPEEDUP=$(echo "$METRICS" | awk '{print $1}')
+    OVERHEAD=$(echo "$METRICS" | awk '{print $2}')
+    OVERHEAD_PERCENT=$(echo "$METRICS" | awk '{print $3}')
+
+    printf "%-7s %-12s %-8s %-9s %-9s %-12s %-10s\n" \
+        "$IMAGE_LIMIT" "static" "$threads" "$STATIC_TIME" \
+        "$SPEEDUP" "$OVERHEAD" "$OVERHEAD_PERCENT"
+
+    echo "$IMAGE_LIMIT,static,$threads,$STATIC_TIME,$SPEEDUP,$OVERHEAD,$OVERHEAD_PERCENT" >> "$CSV"
+
+    POOL_TIME=$(run_pool $IMAGE_LIMIT $threads)
+    METRICS=$(calculate_metrics "$SEQ_TIME" "$POOL_TIME")
+
+    SPEEDUP=$(echo "$METRICS" | awk '{print $1}')
+    OVERHEAD=$(echo "$METRICS" | awk '{print $2}')
+    OVERHEAD_PERCENT=$(echo "$METRICS" | awk '{print $3}')
+
+    printf "%-7s %-12s %-8s %-9s %-9s %-12s %-10s\n" \
+        "$IMAGE_LIMIT" "pool" "$threads" "$POOL_TIME" \
+        "$SPEEDUP" "$OVERHEAD" "$OVERHEAD_PERCENT"
+
+    echo "$IMAGE_LIMIT,pool,$threads,$POOL_TIME,$SPEEDUP,$OVERHEAD,$OVERHEAD_PERCENT" >> "$CSV"
+
+done
+
+echo
+echo "================ CROSSOVER ================"
+echo
+
+echo "threads = 4 and 8"
+echo
+
+echo "images  method       threads  time(s)   speedup   overhead(s)  overhead%"
+echo "------  -----------  -------  --------  --------  -----------  ---------"
+
+for images in "${IMAGE_SIZES[@]}"; do
+
+    if [ "$images" -gt "$TOTAL_IMAGES" ]; then
+        continue
+    fi
+
+    SEQ_TIME=$(run_seq "$images")
+
+    for threads in 4 8; do
+
+        STATIC_TIME=$(run_static "$images" "$threads")
+        METRICS=$(calculate_metrics "$SEQ_TIME" "$STATIC_TIME")
+
+        SPEEDUP=$(echo "$METRICS" | awk '{print $1}')
+        OVERHEAD=$(echo "$METRICS" | awk '{print $2}')
+        OVERHEAD_PERCENT=$(echo "$METRICS" | awk '{print $3}')
+
+        printf "%-7s %-12s %-8s %-9s %-9s %-12s %-10s\n" \
+            "$images" "static" "$threads" "$STATIC_TIME" \
+            "$SPEEDUP" "$OVERHEAD" "$OVERHEAD_PERCENT"
+
+        echo "$images,static,$threads,$STATIC_TIME,$SPEEDUP,$OVERHEAD,$OVERHEAD_PERCENT" >> "$CSV"
+
+        POOL_TIME=$(run_pool "$images" "$threads")
+        METRICS=$(calculate_metrics "$SEQ_TIME" "$POOL_TIME")
+
+        SPEEDUP=$(echo "$METRICS" | awk '{print $1}')
+        OVERHEAD=$(echo "$METRICS" | awk '{print $2}')
+        OVERHEAD_PERCENT=$(echo "$METRICS" | awk '{print $3}')
+
+        printf "%-7s %-12s %-8s %-9s %-9s %-12s %-10s\n" \
+            "$images" "pool" "$threads" "$POOL_TIME" \
+            "$SPEEDUP" "$OVERHEAD" "$OVERHEAD_PERCENT"
+
+        echo "$images,pool,$threads,$POOL_TIME,$SPEEDUP,$OVERHEAD,$OVERHEAD_PERCENT" >> "$CSV"
+
+    done
+done
+
+echo
+echo "Benchmark complete."
+echo "CSV: $CSV"
+echo "Metadata: $META"

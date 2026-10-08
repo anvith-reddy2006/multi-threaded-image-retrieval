@@ -26,5 +26,5 @@ void gaussian_smoothing(
     unsigned char *output,
     int width,
     int height);
-
+int get_image_limit(int default_max);
 #endif

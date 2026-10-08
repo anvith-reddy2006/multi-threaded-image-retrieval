@@ -171,8 +171,8 @@ int load_grayscale(const char *filename,
     color_type == PNG_COLOR_TYPE_PALETTE)
     png_set_rgb_to_gray_fixed(png, 1, -1, -1);
 
-    if (color_type & PNG_COLOR_MASK_ALPHA)
-        png_set_strip_alpha(png);
+if (color_type & PNG_COLOR_MASK_ALPHA)
+    png_set_strip_alpha(png);
 
     png_read_update_info(png, info);
 
@@ -461,8 +461,7 @@ int compare_results(
     if (r1->distance < r2->distance)
         return 1;
 
-    /* equal similarity: order by file name so every version gives the same top-5 */
-    return strcmp(r1->path, r2->path);
+    return 0;
 }
 
 
@@ -504,11 +503,11 @@ if (scenario < 1 ||
     return 1;
 }
 
-    if (num_threads < 1)
-        num_threads = 1;
+if (num_threads < 1)
+    num_threads = 1;
 
-    if (num_threads > 32)
-        num_threads = 32;
+if (num_threads > 32)
+    num_threads = 32;
 
     char *query_path =
         argv[1];
@@ -522,8 +521,7 @@ if (images == NULL)
 }
 
     int image_count = 0;
-    const int image_cap = get_image_limit(MAX_IMAGES);
-
+    int image_limit = get_image_limit(MAX_IMAGES);
     /*
      * Load dataset filenames.
      */
@@ -546,7 +544,7 @@ if (images == NULL)
         if (strstr(entry->d_name, ".png") == NULL)
             continue;
 
-        if (image_count >= image_cap)
+        if (image_count >= image_limit)
             break;
 
         snprintf(

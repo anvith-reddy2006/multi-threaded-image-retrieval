@@ -156,8 +156,7 @@ int compare_results(const void *a,
     if (x->distance < y->distance)
         return 1;
 
-    /* equal similarity: order by file name so every version gives the same top-5 */
-    return strcmp(x->path, y->path);
+    return 0;
 }
 int main(int argc, char *argv[]) {
 
@@ -229,16 +228,16 @@ else if (scenario == 4) {
     }
 
     int image_count = 0;
-    const int image_cap = get_image_limit(MAX_IMAGES);
-
+    int image_limit = get_image_limit(MAX_IMAGES);
     struct dirent *entry;
 
     printf("=== SEQUENTIAL IMAGE RETRIEVAL ===\n");
+    printf("Images: %d\n", image_limit);
     printf("Loading images into memory...\n");
 
     /* Load all images BEFORE timing. */
     while ((entry = readdir(dir)) != NULL &&
-           image_count < image_cap) {
+           image_count < image_limit) {
 
         if (strstr(entry->d_name, ".png") == NULL)
             continue;
@@ -276,7 +275,6 @@ else if (scenario == 4) {
     closedir(dir);
 
     printf("All images loaded.\n");
-    printf("Images: %d\n", image_count);
 
     /* Allocate result array. */
     ImageResult *results =
