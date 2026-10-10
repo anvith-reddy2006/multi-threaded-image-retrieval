@@ -1,0 +1,101 @@
+
+=== Thread scaling:    10000 images (median of 10 runs) ===
+images   method   threads      time(s)   speedup      saved(s)  efficiency
+-------- -------- ------ ------------ --------- ------------- -----------
+   10000 sequential      1     0.019615         -             -           -
+   10000 static        1     0.018664      1.05     +0.000951        1.05
+   10000 static        2     0.009430      2.08     +0.010185        1.04
+   10000 static        4     0.004755      4.13     +0.014860        1.03
+   10000 static        8     0.002651      7.40     +0.016964        0.92
+   10000 static       16     0.002586      7.59     +0.017029        0.47
+   10000 static       32     0.002522      7.78     +0.017093        0.24
+   10000 pool          1     0.019470      1.01     +0.000145        1.01
+   10000 pool          2     0.010149      1.93     +0.009466        0.97
+   10000 pool          4     0.005439      3.61     +0.014176        0.90
+   10000 pool          8     0.003202      6.13     +0.016413        0.77
+   10000 pool         16     0.002930      6.69     +0.016685        0.42
+   10000 pool         32     0.003258      6.02     +0.016357        0.19
+
+=== Crossover: execution time vs data size, 4 threads (median of 10 runs) ===
+images   method   threads      time(s)   speedup      saved(s)  efficiency
+-------- -------- ------ ------------ --------- ------------- -----------
+100      sequential      1     0.000191         -             -           -
+100      static        4     0.000098      1.95     +0.000093        0.49
+100      pool          4     0.000197      0.97     -0.000006        0.24
+250      sequential      1     0.000474         -             -           -
+250      static        4     0.000189      2.51     +0.000285        0.63
+250      pool          4     0.000226      2.10     +0.000248        0.52
+500      sequential      1     0.000950         -             -           -
+500      static        4     0.000293      3.24     +0.000657        0.81
+500      pool          4     0.000344      2.76     +0.000606        0.69
+1000     sequential      1     0.001903         -             -           -
+1000     static        4     0.000530      3.59     +0.001373        0.90
+1000     pool          4     0.000606      3.14     +0.001297        0.79
+2500     sequential      1     0.004809         -             -           -
+2500     static        4     0.001250      3.85     +0.003559        0.96
+2500     pool          4     0.001403      3.43     +0.003406        0.86
+5000     sequential      1     0.009775         -             -           -
+5000     static        4     0.002414      4.05     +0.007361        1.01
+5000     pool          4     0.002797      3.49     +0.006978        0.87
+7500     sequential      1     0.014642         -             -           -
+7500     static        4     0.003609      4.06     +0.011033        1.01
+7500     pool          4     0.004145      3.53     +0.010497        0.88
+10000    sequential      1     0.019580         -             -           -
+10000    static        4     0.004750      4.12     +0.014830        1.03
+10000    pool          4     0.005425      3.61     +0.014155        0.90
+
+=== Crossover: execution time vs data size, 8 threads (median of 10 runs) ===
+images   method   threads      time(s)   speedup      saved(s)  efficiency
+-------- -------- ------ ------------ --------- ------------- -----------
+100      sequential      1     0.000191         -             -           -
+100      static        8     0.000148      1.29     +0.000043        0.16
+100      pool          8     0.000246      0.78     -0.000055        0.10
+250      sequential      1     0.000474         -             -           -
+250      static        8     0.000196      2.42     +0.000278        0.30
+250      pool          8     0.000296      1.60     +0.000178        0.20
+500      sequential      1     0.000950         -             -           -
+500      static        8     0.000250      3.80     +0.000700        0.47
+500      pool          8     0.000334      2.84     +0.000616        0.36
+1000     sequential      1     0.001903         -             -           -
+1000     static        8     0.000384      4.96     +0.001519        0.62
+1000     pool          8     0.000474      4.01     +0.001429        0.50
+2500     sequential      1     0.004809         -             -           -
+2500     static        8     0.000758      6.34     +0.004051        0.79
+2500     pool          8     0.000989      4.86     +0.003820        0.61
+5000     sequential      1     0.009775         -             -           -
+5000     static        8     0.001387      7.05     +0.008388        0.88
+5000     pool          8     0.001736      5.63     +0.008039        0.70
+7500     sequential      1     0.014642         -             -           -
+7500     static        8     0.002007      7.30     +0.012635        0.91
+7500     pool          8     0.002506      5.84     +0.012136        0.73
+10000    sequential      1     0.019580         -             -           -
+10000    static        8     0.002583      7.58     +0.016997        0.95
+10000    pool          8     0.003232      6.06     +0.016348        0.76
+
+=== CROSSOVER POINT (smallest data size where parallel is faster than sequential) ===
+  static  with  4 threads: 100 images
+  pool    with  4 threads: 250 images
+  static  with  8 threads: 100 images
+  pool    with  8 threads: 250 images
+
+=== Thread pool batch size (images per task), 4 threads,    10000 images (median of 10 runs) ===
+batch    method   threads      time(s)   speedup      saved(s)  efficiency
+-------- -------- ------ ------------ --------- ------------- -----------
+-        sequential      1     0.019644         -             -           -
+1        pool          4     0.018842      1.04     +0.000802        0.26
+4        pool          4     0.009567      2.05     +0.010077        0.51
+16       pool          4     0.006183      3.18     +0.013461        0.79
+64       pool          4     0.005450      3.60     +0.014194        0.90
+256      pool          4     0.005307      3.70     +0.014337        0.93
+1024     pool          4     0.006219      3.16     +0.013425        0.79
+
+=== Thread pool batch size (images per task), 8 threads,    10000 images (median of 10 runs) ===
+batch    method   threads      time(s)   speedup      saved(s)  efficiency
+-------- -------- ------ ------------ --------- ------------- -----------
+-        sequential      1     0.019644         -             -           -
+1        pool          8     0.024823      0.79     -0.005179        0.10
+4        pool          8     0.006755      2.91     +0.012889        0.36
+16       pool          8     0.003592      5.47     +0.016052        0.68
+64       pool          8     0.003199      6.14     +0.016445        0.77
+256      pool          8     0.003219      6.10     +0.016425        0.76
+1024     pool          8     0.004452      4.41     +0.015192        0.55

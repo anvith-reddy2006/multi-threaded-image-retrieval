@@ -1,0 +1,12 @@
+Scenario-wise comparison  (threads=4, median of 5 runs, priority: nice -n -20 (active))
+Sc  Scenario                      Query           Seq(s)   Static(s)     Pool(s)   Top1sim  Top1 file                  Same top-5?
+--  ----------------------------- ---------- ----------- ----------- ----------- ---------  -------------------------- -----------
+1   Original                      present       0.019717    0.004796    0.005389    1.0000  image_0000_class_6.png     YES
+1   Original                      absent        0.019519    0.004667    0.005157    0.7969  image_0001_class_9.png     YES
+2   Histogram equalization        present       0.020224    0.004815    0.005429    0.4736  image_5795_class_8.png     YES
+2   Histogram equalization        absent        0.019730    0.004646    0.005362    0.6328  image_7201_class_7.png     YES
+3   Gaussian smoothing            present       0.020522    0.004878    0.005568    0.7734  image_9799_class_0.png     YES
+3   Gaussian smoothing            absent        0.019513    0.004598    0.005329    0.7549  image_0792_class_3.png     YES
+4   Same domain, different image  different     0.018986    0.004537    0.005194    1.0000  image_0001_class_9.png     YES
+
+All three implementations returned the same top-5 in every scenario.

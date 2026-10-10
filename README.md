@@ -57,8 +57,9 @@ Metrics (printed in every benchmark table): speedup = T_seq / T_par, time saved 
 (negative = parallel is slower), efficiency = speedup / threads (1.00 = perfect, lower = time lost to overhead). The crossover point (smallest data size where parallel
 beats sequential) is printed at the end of the crossover experiment and marked on the crossover graphs.
 
-Outputs (not committed): `benchmark_table.txt`, `scenario_table.txt`, `benchmark_results.csv`,
-`scenario_times.csv`, `scenario_results.csv`, `benchmark_meta.txt` (core count, priority), `graphs/output/*.png`.
+Outputs: the final `benchmark_table.txt`, `scenario_table.txt` and `graphs/output/*.png` are committed
+(the results below); the raw `benchmark_results.csv`, `scenario_times.csv`, `scenario_results.csv` and
+`benchmark_meta.txt` (core count, priority) are not.
 
 ## Results (Apple M5, 10 cores = 4 performance + 6 efficiency, 10000 images)
 All runs used `sudo` (`nice -n -20`), with the median of 10 runs (5 for scenarios) and a warm-up run before each configuration.
