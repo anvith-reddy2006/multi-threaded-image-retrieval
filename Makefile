@@ -1,6 +1,10 @@
 CC      = gcc
-CFLAGS  = -Wall -Wextra -O2 -std=gnu11
+CFLAGS  = -Wall -Wextra -O2 -std=gnu11 $(CFLAGS_EXTRA)
 LDFLAGS = -lpng -lm -lpthread
+
+# pick up libpng's include/lib paths when pkg-config knows them (e.g. Homebrew on macOS)
+CFLAGS  += $(shell pkg-config --cflags libpng 2>/dev/null)
+LDFLAGS := $(shell pkg-config --libs-only-L libpng 2>/dev/null) $(LDFLAGS)
 
 SRC     = src
 IMG     = $(SRC)/common/image_processing.c

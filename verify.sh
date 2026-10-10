@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # =========================================================
 #  VERIFY.SH - correctness check (item 8 of the remaining work)
 #  For every query (present / absent / scenario-4) and every scenario 1-4,

@@ -10,10 +10,12 @@ Usage:  python3 graphs/generate_graphs.py [--threads 4]
 Graphs:
   1 exec_time_vs_implementation.png   Execution Time vs Implementation
   2 speedup_vs_implementation.png     Speedup vs Implementation
-  3 overhead_vs_implementation.png    Overhead vs Implementation
+  3 efficiency_vs_threads.png        Efficiency (speedup / threads) vs Number of Threads
   4 exec_time_vs_threads.png          Execution Time vs Number of Threads
   5 static_vs_pool_scaling.png        Static Pthread vs Thread Pool scaling (speedup)
-  6 crossover_<T>threads.png          crossover point (time vs data size)
+  6 exec_time_vs_images.png           Execution Time vs Number of Images
+    crossover_<T>threads.png          crossover point (time vs data size)
+    pool_batch_size.png               Thread Pool speedup vs images per task (batch 1 = original design)
   7 scenario_times.png                scenario-wise execution times
 """
 import argparse, csv, os, statistics
@@ -75,21 +77,17 @@ if scal:
     plt.ylabel("Speedup = T_seq / T_parallel"); plt.title(f"Speedup vs implementation ({N} images)"); plt.legend()
     save("speedup_vs_implementation.png")
 
-    # 3 overhead vs implementation
-    plt.figure(figsize=(7, 5))
-    ovp = [(st - seq) / seq * 100, (po - seq) / seq * 100]
-    ovs = [st - seq, po - seq]
-    bars = plt.bar([f"Static Pthreads\n({T} threads)", f"Thread Pool\n({T} threads)"], ovp, color=[COL["static"], COL["pool"]])
-    plt.axhline(0, color="black")
-    for b, p, s in zip(bars, ovp, ovs):
-        plt.text(b.get_x() + b.get_width() / 2, p, f"{p:+.1f}%\n({s*1000:+.2f} ms)", ha="center",
-                 va="bottom" if p >= 0 else "top")
-    plt.ylabel("Overhead % = (T_par - T_seq) / T_seq x 100")
-    plt.title(f"Overhead vs implementation ({N} images)\n(positive = slower than sequential, negative = gain)")
-    save("overhead_vs_implementation.png")
+    # 3 efficiency vs number of threads (speedup / threads; 1.0 = perfect, lower = time lost to overhead)
+    pos = range(len(threads))
+    plt.figure(figsize=(8, 5))
+    for m in ("static", "pool"):
+        plt.plot(pos, [seq / scal[("scaling", m, t, N)] / t for t in threads], marker="o", color=COL[m], label=LAB[m])
+    plt.axhline(1.0, linestyle=":", color="black", label="Ideal (efficiency = 1)")
+    plt.xticks(pos, threads); plt.xlabel("Number of threads"); plt.ylabel("Efficiency = speedup / threads")
+    plt.title(f"Parallel efficiency vs number of threads ({N} images)"); plt.grid(True); plt.legend()
+    save("efficiency_vs_threads.png")
 
     # 4 execution time vs threads
-    pos = range(len(threads))
     plt.figure(figsize=(8, 5))
     plt.axhline(seq, linestyle="--", color=COL["sequential"], label="Sequential")
     for m in ("static", "pool"):
@@ -112,6 +110,19 @@ else:
 
 # 6 crossover
 cross = {k: v for k, v in med.items() if k[0] == "crossover"}
+
+# 6a execution time vs number of images (linear axes, all crossover thread counts in one plot)
+if cross:
+    sizes = sorted({k[3] for k in cross})
+    plt.figure(figsize=(8, 5))
+    plt.plot(sizes, [cross[("crossover", "seq", 1, n)] for n in sizes], marker="s", color=COL["sequential"], linewidth=2, label="Sequential")
+    for t, ls in zip(sorted({k[2] for k in cross if k[1] != "seq"}), ("-", "--", ":", "-.")):
+        for m in ("static", "pool"):
+            plt.plot(sizes, [cross[("crossover", m, t, n)] for n in sizes], marker="o", linestyle=ls, color=COL[m], label=f"{LAB[m]} ({t} threads)")
+    plt.xlabel("Number of images"); plt.ylabel("Execution time (s)")
+    plt.title("Execution time vs number of images"); plt.grid(True, alpha=0.4); plt.legend()
+    save("exec_time_vs_images.png")
+
 for t in sorted({k[2] for k in cross if k[1] != "seq"}):
     sizes = sorted({k[3] for k in cross})
     plt.figure(figsize=(8, 5))
@@ -136,6 +147,24 @@ for t in sorted({k[2] for k in cross if k[1] != "seq"}):
     save(f"crossover_{t}threads.png")
 if not cross:
     print("no 'crossover' data found - run: sudo ./benchmark.sh crossover")
+
+# 8 thread pool batch size (raw CSV keeps the batch in its own column)
+bat = defaultdict(list)           # (method, threads, batch) -> [times]
+if os.path.exists(args.bench):
+    with open(args.bench, newline="") as f:
+        for r in csv.DictReader(f):
+            if r["experiment"] == "batch":
+                bat[(r["method"], int(r["threads"]), int(r.get("batch") or 0))].append(float(r["time_s"]))
+if bat:
+    bseq = statistics.median(bat[("seq", 1, 0)])
+    plt.figure(figsize=(8, 5))
+    for t in sorted({k[1] for k in bat if k[0] == "pool"}):
+        bs = sorted(k[2] for k in bat if k[0] == "pool" and k[1] == t)
+        plt.plot(bs, [bseq / statistics.median(bat[("pool", t, b)]) for b in bs], marker="o", label=f"Thread Pool ({t} threads)")
+    plt.axhline(1.0, linestyle="--", color=COL["sequential"], label="Sequential")
+    plt.xscale("log", base=2); plt.xticks(bs, bs); plt.xlabel("Images per task (batch size, log scale)"); plt.ylabel("Speedup")
+    plt.title("Thread Pool: effect of task granularity"); plt.grid(True, which="both", alpha=0.4); plt.legend()
+    save("pool_batch_size.png")
 
 # 7 scenario-wise times
 if os.path.exists(args.scen):

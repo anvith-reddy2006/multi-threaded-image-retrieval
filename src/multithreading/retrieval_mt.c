@@ -230,7 +230,8 @@ int compare_results(const void *a,
     if (x->distance < y->distance)
         return 1;
 
-    return 0;
+    /* equal similarity: order by file name so every version gives the same top-5 */
+    return strcmp(x->filename, y->filename);
 }
 
 int main(int argc, char *argv[])

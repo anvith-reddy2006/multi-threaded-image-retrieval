@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # =========================================================
 #  RUN_SCENARIOS.SH - items 1, 2, 8 of the remaining work
 #  Runs the 4 scenarios with query-PRESENT and query-ABSENT cases on all

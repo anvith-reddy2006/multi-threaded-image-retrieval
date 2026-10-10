@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Shared helpers for verify.sh, run_scenarios.sh and benchmark.sh  (source this file)
 
 QUERY_PRESENT="queries/present.png"      # an image that IS in the database
@@ -25,7 +25,8 @@ ensure_setup() {
 # priority: nice -n -20 when allowed (needs sudo), optional CPU pinning via TASKSET_CPUS
 setup_priority() {
     PRIO=()
-    if [ "$(nice -n -20 nice 2>/dev/null || echo 0)" = "-20" ]; then
+    # read back the niceness a child actually gets (portable: Linux and macOS; plain "nice" fails on macOS)
+    if [ "$(nice -n -20 sh -c 'ps -o nice= -p $$' 2>/dev/null | tr -d ' ')" = "-20" ]; then
         PRIO=(nice -n -20); PRIO_NOTE="nice -n -20 (active)"
     else
         PRIO_NOTE="NOT set (run with sudo for nice -n -20) - timings may be noisy"

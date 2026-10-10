@@ -14,6 +14,14 @@
 
 #define QUEUE_SIZE 32
 
+/* images per task: one queue operation covers a whole batch, so lock/signal
+   cost is paid once per batch instead of once per image.
+   Override at run time with the POOL_BATCH environment variable
+   (POOL_BATCH=1 = one image per task, the original design). */
+#define DEFAULT_BATCH_SIZE 64
+
+static int batch_size = DEFAULT_BATCH_SIZE;
+
 typedef struct {
     char path[MAX_PATH];
     unsigned char pixels[FEATURE_SIZE];
@@ -171,8 +179,8 @@ int load_grayscale(const char *filename,
     color_type == PNG_COLOR_TYPE_PALETTE)
     png_set_rgb_to_gray_fixed(png, 1, -1, -1);
 
-if (color_type & PNG_COLOR_MASK_ALPHA)
-    png_set_strip_alpha(png);
+    if (color_type & PNG_COLOR_MASK_ALPHA)
+        png_set_strip_alpha(png);
 
     png_read_update_info(png, info);
 
@@ -271,7 +279,7 @@ void *producer(void *arg)
 
     for (int i = 0;
          i < data->image_count;
-         i++)
+         i += batch_size)
     {
         pthread_mutex_lock(
             &queue->mutex);
@@ -339,10 +347,6 @@ void *worker(void *arg)
     WorkerData *data =
         (WorkerData *)arg;
 
-    printf(
-        "Worker %d started\n",
-        data->thread_id);
-
     while (1)
     {
         int task_index;
@@ -380,7 +384,8 @@ void *worker(void *arg)
         /*
          * CRITICAL SECTION
          *
-         * Remove exactly one task.
+         * Remove exactly one task
+         * (a batch starting at task_index).
          */
 
         task_index =
@@ -412,24 +417,33 @@ void *worker(void *arg)
          * next available task.
          */
 
-        ImageResult *result =
-            &data->results[
-                data->result_count];
+        int batch_end =
+            task_index + batch_size;
 
-        snprintf(
-            result->path,
-            MAX_PATH,
-            "%s",
-            data->images[
-                task_index].path);
+        if (batch_end > data->image_count)
+            batch_end = data->image_count;
 
-        result->distance =
-            calculate_similarity(
-                data->query,
-                data->images[
-                    task_index].pixels);
+        for (int i = task_index;
+             i < batch_end;
+             i++)
+        {
+            ImageResult *result =
+                &data->results[
+                    data->result_count];
 
-        data->result_count++;
+            snprintf(
+                result->path,
+                MAX_PATH,
+                "%s",
+                data->images[i].path);
+
+            result->distance =
+                calculate_similarity(
+                    data->query,
+                    data->images[i].pixels);
+
+            data->result_count++;
+        }
     }
 
     printf(
@@ -461,7 +475,8 @@ int compare_results(
     if (r1->distance < r2->distance)
         return 1;
 
-    return 0;
+    /* equal similarity: order by file name so every version gives the same top-5 */
+    return strcmp(r1->path, r2->path);
 }
 
 
@@ -503,11 +518,11 @@ if (scenario < 1 ||
     return 1;
 }
 
-if (num_threads < 1)
-    num_threads = 1;
+    if (num_threads < 1)
+        num_threads = 1;
 
-if (num_threads > 32)
-    num_threads = 32;
+    if (num_threads > 32)
+        num_threads = 32;
 
     char *query_path =
         argv[1];
@@ -522,6 +537,13 @@ if (images == NULL)
 
     int image_count = 0;
     int image_limit = get_image_limit(MAX_IMAGES);
+
+    const char *batch_env = getenv("POOL_BATCH");
+
+    if (batch_env != NULL && atoi(batch_env) > 0)
+        batch_size = atoi(batch_env);
+
+    printf("Batch size: %d images per task\n", batch_size);
     /*
      * Load dataset filenames.
      */
@@ -761,6 +783,30 @@ for (int i = 0; i < num_threads; i++)
      * Wait for workers.
      */
 
+    for (int i = 0;
+         i < num_threads;
+         i++)
+    {
+        pthread_join(
+            workers[i],
+            NULL);
+    }
+
+
+    /*
+     * Timer stops once all workers are done,
+     * before merging - same boundary as the
+     * static version (merge and sort untimed).
+     */
+
+    double end =
+        get_time_seconds();
+
+
+    /*
+     * Merge per-worker results.
+     */
+
     int total_results = 0;
 
     ImageResult *all_results =
@@ -775,10 +821,6 @@ if (all_results == NULL)
          i < num_threads;
          i++)
     {
-        pthread_join(
-            workers[i],
-            NULL);
-
         for (int j = 0;
              j < worker_data[i].result_count;
              j++)
@@ -788,10 +830,6 @@ if (all_results == NULL)
                 worker_results[i][j];
         }
     }
-
-
-    double end =
-        get_time_seconds();
 
 
     /*
